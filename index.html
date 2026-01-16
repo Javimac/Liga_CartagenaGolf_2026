@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tour Club 2026 - Liga de Golf</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@0.292.0/dist/umd/lucide.min.js"></script>
+    
+    <!-- Firebase SDK v9 Compat -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #020617; color: #f8fafc; margin: 0; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-in { animation: fadeIn 0.4s ease-out forwards; }
+        .modal-overlay { background-color: rgba(2, 6, 23, 0.95); backdrop-filter: blur(8px); }
+        input[type="checkbox"] { accent-color: #16a34a; width: 1.25rem; height: 1.25rem; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // ------------------------------------------------------------------
+        // CONFIGURACIÓN E INICIALIZACIÓN
+        // ------------------------------------------------------------------
+        
+        // 1. Detectar configuración disponible (Manual o Entorno)
+        const manualConfig = {  
+	apiKey: "AIzaSyBAby1n3akCSV1BuuUb66Y0IabCtPnTJSk",
+  	authDomain: "ligagolf2026.firebaseapp.com",
+ 	 projectId: "ligagolf2026",
+  	storageBucket: "ligagolf2026.firebasestorage.app",
+  	messagingSenderId: "199167057380",
+ 	 appId: "1:199167057380:web:78eebddf0dad1257ae3bf1"
+
+        };
+
+        let db, auth;
+        let isFirebaseInitialized = false;
+
+        try {
+            const envConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+            const configToUse = manualConfig.apiKey ? manualConfig : envConfig;
+
+            if (configToUse && configToUse.apiKey && !firebase.apps.length) {
+                firebase.initializeApp(configToUse);
+                db = firebase.firestore();
+                auth = firebase.auth();
+                isFirebaseInitialized = true;
+            } else if (firebase.apps.length) {
+                 db = firebase.firestore();
+                 auth = firebase.auth();
+                 isFirebaseInitialized = true;
+            }
+        } catch (e) {
+            console.warn("Firebase no disponible, iniciando en modo local:", e);
+        }
+
+        // ID de la App (Crítico para permisos)
+        const currentAppId = typeof __app_id !== 'undefined' ? __app_id : "golf-tour-local-v1";
+
+        // --- COMPONENTE DE ICONOS SEGURO ---
+        const Icon = ({ name, className = "w-5 h-5" }) => {
+            const [iconHtml, setIconHtml] = useState('');
+            useEffect(() => {
+                const load = () => {
+                    if (window.lucide && window.lucide.icons && window.lucide.icons[name]) {
+                        const iconData = window.lucide.icons[name];
+                        if (Array.isArray(iconData) && Array.isArray(iconData[1])) {
+                            const paths = iconData[1].map(child => {
+                                if (Array.isArray(child)) {
+                                    const [tag, attrs] = child;
+                                    const attrStr = Object.entries(attrs || {}).map(([k,v]) => `${k}="${v}"`).join(' ');
+                                    return `<${tag} ${attrStr} />`;
+                                }
+                                return '';
+                            }).join('');
+                            setIconHtml(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`);
+                        }
+                    }
+                };
+                load();
+                const t = setTimeout(load, 500);
+                return () => clearTimeout(t);
+            }, [name]);
+            return <span className={`inline-flex items-center justify-center ${className}`} dangerouslySetInnerHTML={{ __html: iconHtml }} />;
+        };
+
+        const formatName = (raw) => {
+            if (!raw || !raw.includes(',')) return (raw || 'Socio').toUpperCase();
+            const [surnames, name] = raw.split(',').map(s => s.trim());
+            const fixCase = (s) => s.toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+            return `${fixCase(name)} ${fixCase(surnames)}`;
+        };
+
+        const App = () => {
+            const [view, setView] = useState('ranking');
+            const [players, setPlayers] = useState([]);
+            const [lastAdjustments, setLastAdjustments] = useState([]);
+            const [user, setUser] = useState(null);
+            const [status, setStatus] = useState('loading');
+            
+            // Estado: 'cloud' (Firebase activo y conectado) o 'local' (LocalStorage)
+            const [mode, setMode] = useState('loading'); 
+            
+            const [isAdmin, setIsAdmin] = useState(false);
+            const [showLogin, setShowLogin] = useState(false);
+            const [showRules, setShowRules] = useState(false);
+            const [password, setPassword] = useState('');
+            const [selectedForRound, setSelectedForRound] = useState([]);
+            const [roundResults, setRoundResults] = useState({}); 
+            const [roundStats, setRoundStats] = useState({});
+            const [includedInSync, setIncludedInSync] = useState({}); 
+
+            const ADMIN_PASS = "1234";
+            const MAX_COUNTED = 50;
+
+            // --- GESTIÓN DE DATOS ---
+            useEffect(() => {
+                const initData = async () => {
+                    // Intento de conexión Cloud
+                    if (isFirebaseInitialized && auth) {
+                        try {
+                            // Autenticación primero
+                            await auth.signInAnonymously();
+                            
+                            auth.onAuthStateChanged(u => {
+                                setUser(u);
+                                if (u) {
+                                    // Referencias seguras
+                                    const dataPath = db.collection('artifacts').doc(currentAppId).collection('public').doc('data');
+                                    
+                                    // Listeners con manejo de error de permisos
+                                    const unsubP = dataPath.collection('players').onSnapshot(
+                                        (snap) => {
+                                            const cloudPlayers = snap.docs.map(d => ({id:d.id, ...d.data()}));
+                                            setPlayers(cloudPlayers);
+                                            setMode('cloud');
+                                            setStatus('ready');
+                                        }, 
+                                        (err) => {
+                                            console.warn("Fallo lectura Cloud (Permisos). Pasando a Local.", err.code);
+                                            enableLocalMode(); 
+                                        }
+                                    );
+
+                                    const unsubA = dataPath.collection('global_stats').doc('adjustments').onSnapshot(
+                                        (d) => {
+                                            if(d.exists) setLastAdjustments(d.data().history || []);
+                                        },
+                                        (err) => console.log("Ignorando error ajustes:", err.code)
+                                    );
+
+                                    return () => { unsubP(); unsubA(); };
+                                }
+                            });
+                        } catch (e) {
+                            console.warn("Error Auth:", e);
+                            enableLocalMode();
+                        }
+                    } else {
+                        enableLocalMode();
+                    }
+                };
+                initData();
+            }, []);
+
+            const enableLocalMode = () => {
+                setMode('local');
+                const localP = localStorage.getItem('golf_players');
+                const localA = localStorage.getItem('golf_adjustments');
+                if (localP) setPlayers(JSON.parse(localP));
+                if (localA) setLastAdjustments(JSON.parse(localA));
+                setStatus('ready');
+            };
+
+            const saveData = async (newPlayers, newAdjustments) => {
+                // 1. Guardar siempre en LocalStorage (Backup instantáneo)
+                localStorage.setItem('golf_players', JSON.stringify(newPlayers));
+                if (newAdjustments) localStorage.setItem('golf_adjustments', JSON.stringify(newAdjustments));
+                
+                // Actualizar estado UI
+                setPlayers(newPlayers);
+                if (newAdjustments) setLastAdjustments(newAdjustments);
+
+                // 2. Intentar guardar en Cloud si estamos conectados
+                if (mode === 'cloud' && db && user) {
+                    try {
+                        const dataPath = db.collection('artifacts').doc(currentAppId).collection('public').doc('data');
+                        
+                        // Sincronizar ajustes globales
+                        if (newAdjustments) {
+                            await dataPath.collection('global_stats').doc('adjustments').set({history: newAdjustments});
+                        }
+
+                        // Para jugadores, lo ideal es actualizar solo el modificado, pero aquí asumimos sincronización
+                        // Nota: En una app real, haríamos updates atómicos. Aquí confiamos en el snapshot listener para refrescar
+                    } catch (e) {
+                        console.warn("Error guardando en nube (Solo local guardado):", e);
+                    }
+                }
+            };
+
+            const rankingData = useMemo(() => {
+                return players.map(p => {
+                    const sorted = [...(p.scores || [])].sort((a, b) => b - a);
+                    const best = sorted.slice(0, MAX_COUNTED);
+                    const posTotal = best.reduce((a, b) => a + b, 0);
+                    const bonusTotal = (p.birdies || 0) + (p.eagles || 0) * 2 + (p.games || 0) * 2 + (p.bonusUnderPar || 0);
+                    return { ...p, totalPoints: posTotal + bonusTotal, avg: p.games > 0 ? (posTotal / Math.min(p.games, MAX_COUNTED)).toFixed(1) : "0" };
+                }).sort((a, b) => b.totalPoints - a.totalPoints);
+            }, [players]);
+
+            // --- HANDLERS ---
+            const handleLogin = (e) => { e.preventDefault(); if(password===ADMIN_PASS){setIsAdmin(true);setShowLogin(false);setPassword('')}else{alert("Clave incorrecta")} };
+            const uncheckNewMembers = () => { const n = {...includedInSync}; selectedForRound.forEach(id => { if(roundStats[id].isNew) n[id] = false; }); setIncludedInSync(n); };
+
+            const addManualPlayer = async () => {
+                const n = prompt("Nombre:"); const h = prompt("HCP:");
+                if(n&&h) {
+                    const newP = { 
+                        id: `p_${Date.now()}`, 
+                        name: n.toUpperCase(), license: '', handicap: parseFloat(h.replace(',','.')), 
+                        scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 
+                    };
+                    const updated = [...players, newP];
+                    
+                    // Escritura Cloud específica
+                    if(mode === 'cloud') {
+                        await db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('players').add(newP);
+                        // El listener actualizará el estado players, no necesitamos saveData local aquí necesariamente
+                    } else {
+                        saveData(updated);
+                    }
+                }
+            };
+
+            const deletePlayer = async (id) => { 
+                if(confirm("¿Borrar?")) {
+                    const updated = players.filter(p => p.id !== id);
+                    if(mode === 'cloud') {
+                        await db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('players').doc(id).delete();
+                    } else {
+                        saveData(updated);
+                    }
+                }
+            };
+
+            const handleFile = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    const lines = ev.target.result.split(/\r?\n/).filter(l => l.trim());
+                    const start = lines.findIndex(l => l.toLowerCase().includes('licencia'));
+                    if (start === -1) return alert("Usa 'Resultados HANDICAP.csv'");
+                    const res = {}, st = {}, sel = [], inc = {};
+                    lines.slice(start + 1).forEach(l => {
+                        const p = l.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(x => x.replace(/"/g, '').trim());
+                        if (p.length >= 10) {
+                            const fName = formatName(p[3]);
+                            let player = players.find(x => x.license === p[1] || x.name === fName);
+                            const id = player ? player.id : `new_${p[1] || Math.random().toString(36).substr(2,5)}`;
+                            sel.push(id); res[id] = parseInt(p[0]); inc[id] = true;
+                            let b=0, eg=0; for(let i=11; i<=28; i++){ if(parseInt(p[i])===-1) b++; if(parseInt(p[i])===-2) eg++; }
+                            const up = (p[8].toUpperCase()==="PAR"?0:parseInt(p[8])) < 0;
+                            st[id] = { name: fName, handicap: parseFloat(p[4].replace(',','.'))||18, license: p[1], birdies: b, eagles: eg, underPar: up, isNew: !player };
+                        }
+                    });
+                    setSelectedForRound(sel); setRoundResults(res); setRoundStats(st); setIncludedInSync(inc); setView('add');
+                };
+                reader.readAsText(file);
+            };
+
+            const confirmRound = async () => {
+                const toSync = selectedForRound.filter(id => includedInSync[id]);
+                if(!toSync.length) return alert("Selecciona jugadores");
+                const table = toSync.length>=11?[50,42,35,30,26,22,19,16,14,12,10,9,8]:toSync.length>=7?[35,29,24,20,17,14,12,10,8,7]:[20,16,12,9,7,5];
+                
+                let updatedPlayers = [...players];
+                const adjs = [];
+
+                // Procesar cada jugador
+                for(const tid of toSync) {
+                    const s = roundStats[tid], pos = roundResults[tid];
+                    let pIndex, pData;
+                    
+                    // Buscar o crear
+                    if(s.isNew) {
+                        pData = { id: `loc_${Date.now()}_${Math.random()}`, name: s.name, license: s.license, handicap: s.handicap, scores:[], birdies:0, eagles:0, bonusUnderPar:0, games:0 };
+                        updatedPlayers.push(pData);
+                        pIndex = updatedPlayers.length - 1;
+                    } else {
+                        pIndex = updatedPlayers.findIndex(x => x.id === tid);
+                        pData = updatedPlayers[pIndex];
+                    }
+
+                    // Calcular nuevo HCP
+                    let adj = pos===1?-0.4:pos===2?-0.2:pos===3?-0.1:0;
+                    if(s.underPar) adj -= 0.2;
+                    if(toSync.length>5 && pos>toSync.length-2) adj += 0.1;
+                    const nH = Math.max(0, Math.min(36, parseFloat((pData.handicap+adj).toFixed(1))));
+                    
+                    if(adj!==0) adjs.push({name: pData.name, change: Number(adj.toFixed(1))});
+                    
+                    // Actualizar datos
+                    const newData = {
+                        ...pData,
+                        handicap: nH,
+                        scores: [...(pData.scores||[]), table[pos-1]||2],
+                        birdies: (pData.birdies||0) + s.birdies,
+                        eagles: (pData.eagles||0) + s.eagles,
+                        bonusUnderPar: (pData.bonusUnderPar||0) + (s.underPar?5:0),
+                        games: (pData.games||0) + 1
+                    };
+                    updatedPlayers[pIndex] = newData;
+
+                    // Si Cloud está activo, escribir individualmente
+                    if(mode === 'cloud') {
+                        const path = db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('players');
+                        if(s.isNew) {
+                            // Crear y esperar para tener ID real si fuera necesario, pero aquí usamos fire&forget para velocidad
+                            path.add(newData);
+                        } else {
+                            path.doc(pData.id).update({
+                                handicap: nH,
+                                scores: firebase.firestore.FieldValue.arrayUnion(table[pos-1]||2),
+                                birdies: firebase.firestore.FieldValue.increment(s.birdies),
+                                eagles: firebase.firestore.FieldValue.increment(s.eagles),
+                                bonusUnderPar: firebase.firestore.FieldValue.increment(s.underPar?5:0),
+                                games: firebase.firestore.FieldValue.increment(1)
+                            });
+                        }
+                    }
+                }
+                
+                // Finalizar
+                if (mode === 'cloud') {
+                    db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('global_stats').doc('adjustments').set({history: adjs});
+                } else {
+                    saveData(updatedPlayers, adjs);
+                }
+                
+                setSelectedForRound([]); setView('ranking');
+            };
+
+            if (status === 'loading') return <div className="h-screen flex flex-col items-center justify-center bg-slate-950 gap-4"><div className="w-12 h-12 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div></div>;
+
+            return (
+                <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+                    <header className="bg-slate-900/80 border-b border-white/10 p-4 sticky top-0 z-50 backdrop-blur-md">
+                        <div className="max-w-5xl mx-auto flex justify-between items-center">
+                            <div className="flex items-center gap-3"><div className="bg-green-600 p-2 rounded-xl shadow-lg rotate-[-4deg]"><Icon name="Trophy" className="text-white w-5 h-5" /></div><div><h1 className="text-lg font-black italic uppercase tracking-tighter leading-none">Tour 2026</h1><p className="text-[9px] text-slate-500 font-bold uppercase mt-1 tracking-widest">Live Ranking</p></div></div>
+                            <div className="flex gap-2">
+                                <button onClick={()=>setShowRules(true)} className="px-3 py-2 rounded-xl border border-white/10 text-slate-400 font-black text-[10px] uppercase flex items-center gap-1 hover:bg-white/5"><Icon name="Info" className="w-3 h-3" /> Info</button>
+                                {!isAdmin ? (!showLogin ? (
+                                    <button onClick={()=>setShowLogin(true)} className="px-4 py-2 rounded-xl border border-green-600/30 text-green-500 font-black uppercase text-[10px] tracking-widest flex items-center gap-1 hover:bg-green-600/10"><Icon name="Lock" className="w-3 h-3" /> Acceso</button>
+                                ) : (
+                                    <form onSubmit={handleLogin} className="flex gap-2 animate-in"><input autoFocus type="password" placeholder="..." className="bg-slate-800 rounded-lg px-2 py-1 text-xs w-16" value={password} onChange={e=>setPassword(e.target.value)} /><button type="submit" className="bg-green-600 p-1.5 rounded-lg"><Icon name="CheckCircle2" className="w-4 h-4" /></button></form>
+                                )) : <button onClick={()=>setIsAdmin(false)} className="px-4 py-2 rounded-xl bg-orange-500 text-white font-black text-[10px] uppercase shadow-lg">Salir</button>}
+                            </div>
+                        </div>
+                    </header>
+
+                    {showRules && (
+                        <div className="fixed inset-0 z-[100] modal-overlay flex items-center justify-center p-4 animate-in">
+                            <div className="bg-slate-900 border border-white/10 rounded-[2rem] w-full max-w-md p-8 relative shadow-2xl">
+                                <button onClick={()=>setShowRules(false)} className="absolute top-6 right-6 text-slate-500"><Icon name="X" /></button>
+                                <h2 className="text-2xl font-black uppercase italic mb-6 text-green-500 tracking-tighter">Reglas</h2>
+                                <div className="space-y-4 text-xs font-bold uppercase tracking-widest leading-relaxed text-slate-300">
+                                    <p className="p-3 bg-white/5 rounded-xl border-l-4 border-green-500">Major: 50 pts | Tour: 35 pts | Social: 20 pts</p>
+                                    <p className="p-3 bg-white/5 rounded-xl border-l-4 border-blue-500">Ranking: Cuentan las 50 mejores rondas.</p>
+                                    <p className="p-3 bg-white/5 rounded-xl border-l-4 border-orange-500">Bonus: Birdie (+1), Eagle (+2), UnderPar (+5).</p>
+                                    <p className="p-3 bg-white/5 rounded-xl border-l-4 border-red-500">HCP: -0.4 (1º), -0.2 (2º). Sube +0.1 (Últimos).</p>
+                                </div>
+                                <button onClick={()=>setShowRules(false)} className="w-full bg-green-600 text-white font-black py-4 rounded-xl mt-6 text-xs uppercase">Cerrar</button>
+                            </div>
+                        </div>
+                    )}
+
+                    <main className="max-w-5xl mx-auto p-4 md:p-6 pb-24 w-full flex-1">
+                        {isAdmin && (
+                            <div className="flex bg-white/5 p-1 rounded-2xl mb-8 border border-white/5 overflow-x-auto no-scrollbar animate-in">
+                                <button onClick={()=>setView('ranking')} className={`flex-1 py-3 px-4 rounded-xl text-[10px] font-black uppercase whitespace-nowrap ${view==='ranking'?'bg-white text-slate-900':'text-slate-500'}`}>Ranking</button>
+                                <button onClick={()=>setView('import')} className={`flex-1 py-3 px-4 rounded-xl text-[10px] font-black uppercase whitespace-nowrap ${view==='import'?'bg-blue-600 text-white':'text-slate-500'}`}>Importar</button>
+                                <button onClick={()=>setView('roster')} className={`flex-1 py-3 px-4 rounded-xl text-[10px] font-black uppercase whitespace-nowrap ${view==='roster'?'bg-purple-600 text-white':'text-slate-500'}`}>Plantilla</button>
+                                {selectedForRound.length>0 && <button onClick={()=>setView('add')} className={`flex-1 py-3 px-4 rounded-xl text-[10px] font-black uppercase whitespace-nowrap ${view==='add'?'bg-green-600 text-white':'text-slate-500'}`}>Validar</button>}
+                            </div>
+                        )}
+
+                        {view === 'ranking' && (
+                            <div className="space-y-6 animate-in">
+                                {mode === 'local' && (
+                                    <div className="bg-orange-500/10 border border-orange-500/20 p-3 rounded-xl text-center">
+                                        <p className="text-[10px] font-black text-orange-500 uppercase tracking-widest">Modo Local (Sin Nube) - Configura Firebase para compartir</p>
+                                    </div>
+                                )}
+                                {lastAdjustments.length > 0 && (
+                                    <div className="bg-blue-600/10 border border-blue-600/30 p-5 rounded-2xl flex flex-wrap gap-2">
+                                        <div className="w-full text-[9px] font-black uppercase text-blue-400 mb-1 flex items-center gap-1"><Icon name="RefreshCw" className="w-3 h-3" /> Ajustes Recientes</div>
+                                        {lastAdjustments.map((a, i) => <div key={i} className="bg-slate-900/50 px-3 py-1.5 rounded-lg border border-white/5 text-[10px] font-bold"><span>{a.name}</span> <span className={a.change<0?'text-green-400':'text-red-400'}>{a.change>0?`+${a.change}`:a.change}</span></div>)}
+                                    </div>
+                                )}
+                                {rankingData.length === 0 ? (
+                                    <div className="p-20 text-center bg-slate-900/30 rounded-[3rem] border border-dashed border-white/10"><Icon name="Users" className="mb-4 text-slate-800 w-10 h-10 mx-auto" /><p className="text-slate-500 text-xs font-bold uppercase tracking-widest italic">Esperando jornada...</p></div>
+                                ) : (
+                                    <div className="bg-slate-900 border border-white/5 rounded-[2rem] overflow-hidden shadow-2xl">
+                                        <table className="w-full text-sm">
+                                            <thead className="bg-white/[0.02] text-[10px] uppercase text-slate-500 font-black border-b border-white/5 text-left"><tr><th className="px-6 py-4">Pos</th><th className="px-6 py-4">Socio</th><th className="px-6 py-4 text-center">HCP</th><th className="px-6 py-4 text-right">Pts</th></tr></thead>
+                                            <tbody className="divide-y divide-white/5 font-bold uppercase tracking-tight">
+                                                {rankingData.map((p, i) => (
+                                                    <tr key={p.id} className="hover:bg-white/[0.01]">
+                                                        <td className="px-6 py-5 text-slate-700 italic text-xl w-16">{i+1}</td>
+                                                        <td className="px-6 py-5 text-white truncate max-w-[150px]">{p.name} <span className="text-[9px] text-slate-600 ml-1 font-normal opacity-50">({p.games})</span></td>
+                                                        <td className="px-6 py-5 text-center font-mono text-green-400 text-xs">{p.handicap}</td>
+                                                        <td className="px-6 py-5 text-right text-lg text-white">{p.totalPoints}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {view === 'roster' && isAdmin && (
+                            <div className="space-y-4 animate-in">
+                                <button onClick={addManualPlayer} className="w-full bg-purple-600 py-4 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all"><Icon name="PlusCircle" className="w-4 h-4" /> Nuevo Socio</button>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {players.sort((a,b)=>(a.name||"").localeCompare(b.name||"")).map(p => (
+                                        <div key={p.id} className="bg-slate-900/50 p-5 rounded-2xl border border-white/5 flex justify-between items-center group">
+                                            <div><p className="font-black text-sm uppercase text-white tracking-tight">{p.name}</p><p className="text-[10px] text-slate-500 font-bold uppercase">HCP: {p.handicap}</p></div>
+                                            <button onClick={() => deletePlayer(p.id)} className="p-2 text-slate-800 hover:text-red-500 transition-colors"><Icon name="Trash2" className="w-5 h-5" /></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'import' && isAdmin && (
+                            <div className="max-w-2xl mx-auto py-20 text-center bg-slate-900/30 rounded-[3rem] border border-white/5 border-dashed animate-in">
+                                <Icon name="Upload" className="w-12 h-12 text-blue-500 mx-auto mb-6 opacity-80" />
+                                <h2 className="text-2xl font-black italic uppercase mb-8 tracking-tighter">Subir Jornada</h2>
+                                <label className="bg-blue-600 text-white font-black py-5 px-10 rounded-2xl shadow-xl uppercase text-xs cursor-pointer inline-block active:scale-95 transition-all hover:bg-blue-500">Seleccionar CSV<input type="file" accept=".csv" onChange={handleFile} className="hidden" /></label>
+                                <p className="text-[10px] text-slate-500 uppercase font-bold mt-8 flex items-center justify-center gap-2"><Icon name="Info" className="w-3 h-3" /> Archivo de Golf Directo</p>
+                            </div>
+                        )}
+
+                        {view === 'add' && isAdmin && (
+                            <div className="max-w-3xl mx-auto space-y-4 animate-in">
+                                <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-black uppercase italic tracking-tighter text-green-500">Validar</h2><button onClick={uncheckNewMembers} className="text-[9px] font-black uppercase text-orange-500 border border-orange-500/30 px-3 py-1.5 rounded-lg hover:bg-orange-500/10">Ignorar Invitados</button></div>
+                                {selectedForRound.map(id => {
+                                    const s = roundStats[id]; const inc = includedInSync[id];
+                                    return (
+                                        <div key={id} className={`p-4 rounded-xl border transition-all flex justify-between items-center ${inc ? 'bg-white/5 border-white/10' : 'opacity-20 grayscale'}`}>
+                                            <div className="flex items-center gap-4">
+                                                <input type="checkbox" checked={inc} onChange={() => setIncludedInSync({...includedInSync, [id]: !inc})} />
+                                                <div><p className="font-black text-sm uppercase text-white leading-none">{s.name}</p><p className="text-[9px] font-bold text-slate-500 uppercase mt-1">POS: {roundResults[id]}º • {s.birdies} BRD {s.isNew && inc ? '• NUEVO' : ''}</p></div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                                <button onClick={confirmRound} className="w-full bg-green-600 text-white font-black py-5 rounded-2xl shadow-xl uppercase text-xs mt-10 active:scale-95 transition-all shadow-green-900/20">Sincronizar Datos 🔥</button>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Footer Info */}
+                    <div className="fixed bottom-6 left-6 right-6 max-w-lg mx-auto pointer-events-none z-50">
+                        <div className="bg-slate-900/95 backdrop-blur-2xl border border-white/10 p-5 rounded-2xl shadow-2xl flex justify-between items-center px-10 border-green-500/10">
+                            <div className="flex items-center gap-4">
+                                <div className="bg-green-600/20 p-2 rounded-xl text-green-500 shadow-inner"><Icon name="ShieldCheck" className="w-5 h-5" /></div>
+                                <p className="text-[10px] font-black text-white uppercase italic tracking-tighter">
+                                    {mode === 'cloud' ? 'Conexión Cloud Activa' : 'Modo Local (Sin Sync)'}
+                                </p>
+                            </div>
+                            <div className={`bg-${mode === 'cloud' ? 'green' : 'orange'}-500/20 px-3 py-1 rounded-full`}>
+                                <div className={`w-1.5 h-1.5 bg-${mode === 'cloud' ? 'green' : 'orange'}-500 rounded-full animate-pulse`}></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
