@@ -38,7 +38,7 @@
         const { useState, useEffect, useMemo } = React;
 
         // ------------------------------------------------------------------
-        // 🔐 CREDENCIALES INTEGRADAS
+        // 🔐 CREDENCIALES
         // ------------------------------------------------------------------
         const manualConfig = {
             apiKey: "AIzaSyBqfSx5ulg2-X6BolLp7DACk6q4Y4-fEUw",
@@ -183,29 +183,62 @@
                 } catch(e) { setStatus('ready'); alert("Error al borrar"); }
             };
 
-            const handleFiles = (e) => {
-                const files = e.target.files;
-                if (!files || !files.length) return;
-                const reader = new FileReader();
-                reader.onload = (ev) => {
-                    const data = new Uint8Array(ev.target.result);
-                    const wb = XLSX.read(data, {type:'array'});
-                    const ws = wb.Sheets[wb.SheetNames[0]];
-                    const json = XLSX.utils.sheet_to_json(ws, {header:1});
-                    processRows(json);
+            // --- MULTI CARGA REAL ---
+            const handleFiles = async (e) => {
+                const files = Array.from(e.target.files);
+                if (!files.length) return;
+
+                setStatus('loading'); // Bloqueo visual durante la carga
+                const allRows = [];
+
+                const readFilePromise = (file) => {
+                    return new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                            try {
+                                const data = new Uint8Array(ev.target.result);
+                                const wb = XLSX.read(data, {type:'array'});
+                                const ws = wb.Sheets[wb.SheetNames[0]];
+                                const json = XLSX.utils.sheet_to_json(ws, {header:1});
+                                resolve(json);
+                            } catch (err) {
+                                console.error("Error leyendo archivo:", file.name, err);
+                                resolve([]); // No fallar todo el proceso si uno falla
+                            }
+                        };
+                        reader.onerror = reject;
+                        reader.readAsArrayBuffer(file);
+                    });
                 };
-                reader.readAsArrayBuffer(files[0]);
+
+                try {
+                    const sheets = await Promise.all(files.map(readFilePromise));
+                    
+                    // Procesar cada hoja
+                    sheets.forEach(rows => {
+                        // Buscar cabecera
+                        let start = -1;
+                        for(let i=0; i<Math.min(rows.length, 20); i++) {
+                            const s = (rows[i]||[]).join(' ').toLowerCase();
+                            if(s.includes('licencia') && s.includes('nombre')) { start = i; break; }
+                        }
+                        if(start !== -1) {
+                            rows.slice(start+1).forEach(row => { if (row.length > 5) allRows.push(row); });
+                        }
+                    });
+
+                    if (allRows.length > 0) processAllRows(allRows);
+                    else { alert("No se encontraron datos válidos en los archivos."); setStatus('ready'); }
+                    
+                } catch (error) {
+                    console.error(error);
+                    alert("Error procesando archivos.");
+                    setStatus('ready');
+                }
             };
 
-            const processRows = (rows) => {
-                let start = -1;
-                for(let i=0; i<Math.min(rows.length, 20); i++) {
-                    const s = (rows[i]||[]).join(' ').toLowerCase();
-                    if(s.includes('licencia') && s.includes('nombre')) { start = i; break; }
-                }
-                if(start === -1) return alert("CSV no válido. Usa 'Resultados HANDICAP'");
-
-                let extracted = rows.slice(start+1).map(row => {
+            const processAllRows = (rows) => {
+                let extracted = rows.map(row => {
                     if (!row[1] || !row[3]) return null;
                     const lic = String(row[1]).trim();
                     let name = String(row[3]).trim().replace(/"/g,'');
@@ -217,39 +250,66 @@
 
                     let hcp = parseFloat(String(row[4]).replace(',','.')) || 18;
                     let resTotal = String(row[8]).toUpperCase() === 'PAR' ? 0 : parseInt(row[8]||0);
-                    if (isNaN(resTotal)) resTotal = 999;
+                    if (isNaN(resTotal)) resTotal = 999; 
+
                     let b=0, eg=0;
                     for(let k=11; k<=28; k++) {
                         if(row[k] == -1) b++;
                         if(row[k] == -2) eg++;
                     }
-                    return { name, license: lic, handicap: hcp, score: resTotal, birdies: b, eagles: eg, underPar: resTotal < 0 };
+
+                    return { 
+                        name, license: lic, handicap: hcp, 
+                        score: resTotal, 
+                        birdies: b, eagles: eg, underPar: resTotal < 0 
+                    };
                 }).filter(x => x!==null);
 
-                extracted.sort((a,b) => {
+                // Unificar y Ordenar
+                // Creamos un mapa para fusionar duplicados (mismo jugador en 2 archivos)
+                const mergedPlayers = {};
+                
+                extracted.forEach(p => {
+                    if (!mergedPlayers[p.license]) {
+                        mergedPlayers[p.license] = p;
+                    } else {
+                        // Si ya existe, nos quedamos con el que tenga más datos de birdies (probablemente el archivo de Resultados)
+                        if (p.birdies > mergedPlayers[p.license].birdies || p.eagles > mergedPlayers[p.license].eagles) {
+                            mergedPlayers[p.license] = p;
+                        }
+                    }
+                });
+
+                // Convertir de nuevo a array y ordenar
+                const finalArray = Object.values(mergedPlayers);
+                finalArray.sort((a,b) => {
                     if (a.score !== b.score) return a.score - b.score;
                     return a.handicap - b.handicap;
                 });
 
                 const res = {}, st = {}, sel = [], inc = {};
-                extracted.forEach((data, idx) => {
-                    const pid = `p_${data.license}`;
+                
+                finalArray.forEach((data, idx) => {
                     const existing = players.find(p => p.license === data.license);
-                    if (!sel.includes(pid)) {
-                        sel.push(pid);
-                        res[pid] = idx + 1; 
-                        inc[pid] = true;
-                        st[pid] = { ...data, isNew: !existing };
-                    }
+                    const pid = existing ? existing.id : `new_${data.license}`;
+                    
+                    sel.push(pid);
+                    res[pid] = idx + 1; // Posición recalcula unificada
+                    inc[pid] = true;
+                    st[pid] = { ...data, isNew: !existing };
                 });
+                
                 setSelectedForRound(sel); setRoundResults(res); setRoundStats(st); setIncludedInSync(inc); setView('add');
+                setStatus('ready'); // Desbloquear UI
             };
 
             const confirmRound = async () => {
                 const toSync = selectedForRound.filter(id => includedInSync[id]);
                 if(!toSync.length) return alert("Selecciona jugadores");
                 
+                // Reordenar por la posición calculada
                 toSync.sort((a,b) => roundResults[a] - roundResults[b]);
+                
                 const num = toSync.length;
                 const table = num>=11?[50,42,35,30,26,22,19,16,14,12,10,9,8]:num>=7?[35,29,24,20,17,14,12,10,8,7]:[20,16,12,9,7,5];
                 
@@ -257,68 +317,75 @@
                 const adjs = [];
                 const pubRef = db ? db.collection('artifacts').doc(currentAppId).collection('public').doc('data') : null;
 
-                for (let i = 0; i < toSync.length; i++) {
-                    const tid = toSync[i];
-                    const s = roundStats[tid];
-                    const realRank = i + 1; 
+                setStatus('loading'); // Bloquear mientras guarda
 
-                    let player = players.find(p => p.license === s.license);
-                    let data = player || { 
-                        name: s.name, license: s.license, handicap: s.handicap, 
-                        scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 
-                    };
+                try {
+                    for (let i = 0; i < toSync.length; i++) {
+                        const tid = toSync[i];
+                        const s = roundStats[tid];
+                        const realRank = i + 1; 
 
-                    const pts = table[realRank-1] || 2;
-                    let adj = 0;
-                    if(realRank===1) adj = -0.4;
-                    else if(realRank===2) adj = -0.2;
-                    else if(realRank===3) adj = -0.1;
-                    if(s.underPar) adj -= 0.2;
-                    if(num>5 && realRank>num-2) adj += 0.1;
-                    
-                    const nH = Math.max(0, parseFloat((data.handicap + adj).toFixed(1)));
-                    if (adj !== 0) adjs.push({ name: s.name, change: adj, final: newH });
-                    
-                    // Actualizamos todos los datos acumulativos
-                    const newData = {
-                        ...data,
-                        handicap: nH,
-                        scores: [...(data.scores||[]), Number(pts)],
-                        birdies: (data.birdies||0) + s.birdies,
-                        eagles: (data.eagles||0) + s.eagles,
-                        bonusUnderPar: (data.bonusUnderPar||0) + (s.underPar?5:0),
-                        games: (data.games||0) + 1
-                    };
+                        let player = players.find(p => p.license === s.license);
+                        let ref, data;
 
-                    // FIX: Si es nuevo, lo creamos directamente con los datos ya sumados
-                    if (s.isNew) {
-                         if (useCloud) {
-                             const doc = await pubRef.collection('players').add(newData);
-                             newData.id = doc.id;
-                         } else {
-                             newData.id = `loc_${Date.now()}_${i}`;
-                         }
-                         updatedPlayers.push(newData);
-                    } else {
-                         // Si existe, actualizamos
-                         const pIndex = updatedPlayers.findIndex(p => p.id === data.id);
-                         if(pIndex !== -1) updatedPlayers[pIndex] = newData;
-                         
-                         if (useCloud) {
-                             await pubRef.collection('players').doc(data.id).update({
-                                 handicap: nH,
-                                 scores: firebase.firestore.FieldValue.arrayUnion(Number(pts)),
-                                 birdies: firebase.firestore.FieldValue.increment(s.birdies),
-                                 eagles: firebase.firestore.FieldValue.increment(s.eagles),
-                                 bonusUnderPar: firebase.firestore.FieldValue.increment(s.underPar?5:0),
-                                 games: firebase.firestore.FieldValue.increment(1)
-                             });
-                         }
+                        if (!player) {
+                             const newP = { name: s.name, license: s.license, handicap: s.handicap, scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 };
+                            if (useCloud) {
+                                const doc = await pubRef.collection('players').add(newP);
+                                ref = doc; data = { ...newP, id: doc.id };
+                            } else {
+                                newP.id = `loc_${Date.now()}_${i}`; data = newP; updatedPlayers.push(data);
+                            }
+                        } else {
+                            ref = useCloud ? pubRef.collection('players').doc(player.id) : null;
+                            data = player;
+                        }
+
+                        const pts = table[realRank-1] || 2;
+                        let adj = 0;
+                        if(realRank===1) adj = -0.4;
+                        else if(realRank===2) adj = -0.2;
+                        else if(realRank===3) adj = -0.1;
+                        if(s.underPar) adj -= 0.2;
+                        if(num>5 && realRank>num-2) adj += 0.1;
+                        
+                        const newHcp = Math.max(0, parseFloat((data.handicap + adj).toFixed(1)));
+                        if (adj !== 0) adjs.push({ name: s.name, change: adj, final: newHcp });
+                        
+                        const currentScores = data.scores || [];
+                        const newScores = [...currentScores, Number(pts)]; // Sobrescribir array
+
+                        // Actualizar Local
+                        const pIndex = updatedPlayers.findIndex(p => p.id === data.id);
+                        if(pIndex !== -1) {
+                            updatedPlayers[pIndex] = {
+                                ...data,
+                                handicap: newHcp,
+                                scores: newScores,
+                                birdies: (data.birdies||0) + s.birdies,
+                                eagles: (data.eagles||0) + s.eagles,
+                                bonusUnderPar: (data.bonusUnderPar||0) + (s.underPar?5:0),
+                                games: (data.games||0) + 1
+                            };
+                        }
+
+                        if (useCloud && ref) {
+                            await ref.update({
+                                handicap: newHcp,
+                                scores: newScores,
+                                birdies: firebase.firestore.FieldValue.increment(s.birdies),
+                                eagles: firebase.firestore.FieldValue.increment(s.eagles),
+                                bonusUnderPar: firebase.firestore.FieldValue.increment(s.underPar?5:0),
+                                games: firebase.firestore.FieldValue.increment(1)
+                            });
+                        }
                     }
-                }
-                
-                if (useCloud) { pubRef.collection('global_stats').doc('adjustments').set({history: adjs}); } 
-                else { saveDataLocal(updatedPlayers, adjs); }
+                    
+                    if (useCloud) { pubRef.collection('global_stats').doc('adjustments').set({history: adjs}); } 
+                    else { saveDataLocal(updatedPlayers, adjs); }
+                } catch(e) { console.error(e); }
+
+                setStatus('ready');
                 setSelectedForRound([]); setView('ranking');
             };
 
