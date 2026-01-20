@@ -4,15 +4,23 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tour Club 2026 - Liga de Golf</title>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@0.292.0/dist/umd/lucide.min.js"></script>
+    <!-- SheetJS (Excel) -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    
+    <!-- FIREBASE SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #020617; color: #f8fafc; margin: 0; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
@@ -30,7 +38,7 @@
         const { useState, useEffect, useMemo } = React;
 
         // ------------------------------------------------------------------
-        // ⚠️ TUS CREDENCIALES
+        // 🔐 CREDENCIALES INTEGRADAS
         // ------------------------------------------------------------------
         const manualConfig = {
             apiKey: "AIzaSyBqfSx5ulg2-X6BolLp7DACk6q4Y4-fEUw",
@@ -67,27 +75,21 @@
         initFirebase();
 
         const Icon = ({ name, className = "w-5 h-5" }) => {
-            const [iconHtml, setIconHtml] = useState('');
+            const [svg, setSvg] = useState(null);
             useEffect(() => {
-                const load = () => {
-                    if (window.lucide && window.lucide.icons && window.lucide.icons[name]) {
-                        const iconData = window.lucide.icons[name];
-                        if (Array.isArray(iconData) && Array.isArray(iconData[1])) {
-                            const paths = iconData[1].map(child => {
-                                if (Array.isArray(child)) {
-                                    const [tag, attrs] = child;
-                                    const attrStr = Object.entries(attrs || {}).map(([k,v]) => `${k}="${v}"`).join(' ');
-                                    return `<${tag} ${attrStr} />`;
-                                } return '';
-                            }).join('');
-                            setIconHtml(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`);
-                        }
+                if (window.lucide && window.lucide.icons && window.lucide.icons[name]) {
+                    const iconData = window.lucide.icons[name];
+                    if (Array.isArray(iconData) && Array.isArray(iconData[1])) {
+                        const paths = iconData[1].map(child => {
+                            const [tag, attrs] = child;
+                            const attrStr = Object.entries(attrs || {}).map(([k,v]) => `${k}="${v}"`).join(' ');
+                            return `<${tag} ${attrStr} />`;
+                        }).join('');
+                        setSvg(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`);
                     }
-                };
-                load();
-                const t = setTimeout(load, 500); return () => clearTimeout(t);
+                }
             }, [name]);
-            return <span className={`inline-flex items-center justify-center ${className}`} dangerouslySetInnerHTML={{ __html: iconHtml }} />;
+            return svg ? <span className={`inline-flex items-center justify-center ${className}`} dangerouslySetInnerHTML={{ __html: svg }} /> : <span className={`inline-block w-5 h-5 bg-slate-800 rounded-full ${className}`}></span>;
         };
 
         const formatName = (raw) => {
@@ -115,40 +117,42 @@
             const [roundStats, setRoundStats] = useState({});
             const [includedInSync, setIncludedInSync] = useState({}); 
             const [sortConfig, setSortConfig] = useState({ key: 'totalPoints', direction: 'desc' });
+
             const ADMIN_PASS = "1234";
             const MAX_COUNTED = 50;
 
             useEffect(() => {
-                const initData = async () => {
-                    const enableLocalMode = () => {
-                        setMode('local');
-                        const lp = localStorage.getItem('golf_players');
-                        const la = localStorage.getItem('golf_adjustments');
-                        if (lp) setPlayers(JSON.parse(lp));
-                        if (la) setLastAdjustments(JSON.parse(la));
+                const load = async () => {
+                    const loadLocal = () => {
+                        try {
+                            const p = JSON.parse(localStorage.getItem('golf_players') || '[]');
+                            const a = JSON.parse(localStorage.getItem('golf_adjustments') || '[]');
+                            setPlayers(p);
+                            setLastAdjustments(a);
+                        } catch(e) {}
                         setStatus('ready');
                     };
+
                     if (useCloud && auth) {
                         try {
                             await auth.signInAnonymously();
-                            auth.onAuthStateChanged(u => {
-                                setUser(u);
-                                if (u) {
-                                    const pubRef = db.collection('artifacts').doc(currentAppId).collection('public').doc('data');
-                                    pubRef.collection('players').onSnapshot(s => {
-                                        setPlayers(s.docs.map(d => ({id:d.id, ...d.data()})));
-                                        setStatus('ready');
-                                        setMode('cloud');
-                                    }, err => { enableLocalMode(); });
-                                    pubRef.collection('global_stats').doc('adjustments').onSnapshot(d => {
-                                        if(d.exists) setLastAdjustments(d.data().history || []);
-                                    });
+                            const ref = db.collection('artifacts').doc(currentAppId).collection('public').doc('data');
+                            ref.collection('players').onSnapshot(snap => {
+                                const list = snap.docs.map(d => ({id: d.id, ...d.data()}));
+                                setPlayers(list);
+                                localStorage.setItem('golf_players', JSON.stringify(list));
+                                setStatus('ready');
+                            }, err => { loadLocal(); });
+
+                            ref.collection('global_stats').doc('adjustments').onSnapshot(d => {
+                                if(d.exists) {
+                                    setLastAdjustments(d.data().history || []);
                                 }
                             });
-                        } catch (e) { enableLocalMode(); }
-                    } else { enableLocalMode(); }
+                        } catch (e) { loadLocal(); }
+                    } else { loadLocal(); }
                 };
-                initData();
+                load();
             }, []);
 
             const saveDataLocal = (newPlayers, newAdjustments) => {
@@ -180,37 +184,46 @@
             };
 
             const handleFiles = (e) => {
-                const files = Array.from(e.target.files);
-                if (!files.length) return;
-                const readFile = (file) => new Promise((resolve) => {
-                    const reader = new FileReader();
-                    reader.onload = (ev) => {
-                        const data = new Uint8Array(ev.target.result);
-                        const wb = XLSX.read(data, {type:'array'});
-                        const json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1});
-                        resolve(json);
-                    };
-                    reader.readAsArrayBuffer(file);
-                });
-                
-                Promise.all(files.map(readFile)).then(allSheets => {
-                    const allRows = allSheets.flat();
-                    if(allRows.length > 0) processAllRows(allRows);
-                });
+                const files = e.target.files;
+                if (!files || !files.length) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    const data = new Uint8Array(ev.target.result);
+                    const wb = XLSX.read(data, {type:'array'});
+                    const ws = wb.Sheets[wb.SheetNames[0]];
+                    const json = XLSX.utils.sheet_to_json(ws, {header:1});
+                    processRows(json);
+                };
+                reader.readAsArrayBuffer(files[0]);
             };
 
-            const processAllRows = (rows) => {
-                let extracted = rows.map(row => {
-                    const lic = row[1] ? String(row[1]).trim() : "";
-                    const rawName = row[3] ? String(row[3]).trim() : "";
-                    if (!lic && !rawName) return null;
-                    const hcp = parseFloat(String(row[4]).replace(',','.')) || 18;
-                    const resTotal = String(row[8]).toUpperCase() === 'PAR' ? 0 : parseInt(row[8]||0);
-                    let b=0, eg=0;
-                    if (row.length > 28) {
-                        for(let k=11; k<=28; k++) { if(row[k] == -1) b++; if(row[k] == -2) eg++; }
+            const processRows = (rows) => {
+                let start = -1;
+                for(let i=0; i<Math.min(rows.length, 20); i++) {
+                    const s = (rows[i]||[]).join(' ').toLowerCase();
+                    if(s.includes('licencia') && s.includes('nombre')) { start = i; break; }
+                }
+                if(start === -1) return alert("CSV no válido. Usa 'Resultados HANDICAP'");
+
+                let extracted = rows.slice(start+1).map(row => {
+                    if (!row[1] || !row[3]) return null;
+                    const lic = String(row[1]).trim();
+                    let name = String(row[3]).trim().replace(/"/g,'');
+                    if (name.includes(',')) {
+                        const [surn, n] = name.split(',');
+                        name = `${n.trim()} ${surn.trim()}`;
                     }
-                    return { name: formatName(rawName), license: lic, handicap: hcp, score: isNaN(resTotal)?999:resTotal, birdies: b, eagles: eg, underPar: resTotal < 0 };
+                    name = name.toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+
+                    let hcp = parseFloat(String(row[4]).replace(',','.')) || 18;
+                    let resTotal = String(row[8]).toUpperCase() === 'PAR' ? 0 : parseInt(row[8]||0);
+                    if (isNaN(resTotal)) resTotal = 999;
+                    let b=0, eg=0;
+                    for(let k=11; k<=28; k++) {
+                        if(row[k] == -1) b++;
+                        if(row[k] == -2) eg++;
+                    }
+                    return { name, license: lic, handicap: hcp, score: resTotal, birdies: b, eagles: eg, underPar: resTotal < 0 };
                 }).filter(x => x!==null);
 
                 extracted.sort((a,b) => {
@@ -224,12 +237,11 @@
                     const existing = players.find(p => p.license === data.license);
                     if (!sel.includes(pid)) {
                         sel.push(pid);
-                        res[pid] = idx + 1; // Posición absoluta inicial
+                        res[pid] = idx + 1; 
                         inc[pid] = true;
                         st[pid] = { ...data, isNew: !existing };
                     }
                 });
-                
                 setSelectedForRound(sel); setRoundResults(res); setRoundStats(st); setIncludedInSync(inc); setView('add');
             };
 
@@ -237,9 +249,7 @@
                 const toSync = selectedForRound.filter(id => includedInSync[id]);
                 if(!toSync.length) return alert("Selecciona jugadores");
                 
-                // Reordenar por la posición original para respetar el mérito deportivo
                 toSync.sort((a,b) => roundResults[a] - roundResults[b]);
-                
                 const num = toSync.length;
                 const table = num>=11?[50,42,35,30,26,22,19,16,14,12,10,9,8]:num>=7?[35,29,24,20,17,14,12,10,8,7]:[20,16,12,9,7,5];
                 
@@ -253,16 +263,10 @@
                     const realRank = i + 1; 
 
                     let player = players.find(p => p.license === s.license);
-                    let ref, data;
-
-                    if (!player) {
-                         const newP = { name: s.name, license: s.license, handicap: s.handicap, scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 };
-                        const doc = await pubRef.collection('players').add(newP);
-                        ref = doc; data = newP;
-                    } else {
-                        ref = pubRef.collection('players').doc(player.id);
-                        data = player;
-                    }
+                    let data = player || { 
+                        name: s.name, license: s.license, handicap: s.handicap, 
+                        scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 
+                    };
 
                     const pts = table[realRank-1] || 2;
                     let adj = 0;
@@ -272,35 +276,62 @@
                     if(s.underPar) adj -= 0.2;
                     if(num>5 && realRank>num-2) adj += 0.1;
                     
-                    const newHcp = Math.max(0, parseFloat((data.handicap + adj).toFixed(1)));
-                    if (adj !== 0) adjs.push({ name: s.name, change: adj, final: newHcp });
+                    const nH = Math.max(0, parseFloat((data.handicap + adj).toFixed(1)));
+                    if (adj !== 0) adjs.push({ name: s.name, change: adj, final: newH });
                     
-                    const newScores = [...(data.scores||[]), Number(pts)];
-                    await ref.update({
-                        handicap: newHcp,
-                        scores: newScores,
-                        birdies: firebase.firestore.FieldValue.increment(s.birdies),
-                        eagles: firebase.firestore.FieldValue.increment(s.eagles),
-                        bonusUnderPar: firebase.firestore.FieldValue.increment(s.underPar?5:0),
-                        games: firebase.firestore.FieldValue.increment(1)
-                    });
+                    // Actualizamos todos los datos acumulativos
+                    const newData = {
+                        ...data,
+                        handicap: nH,
+                        scores: [...(data.scores||[]), Number(pts)],
+                        birdies: (data.birdies||0) + s.birdies,
+                        eagles: (data.eagles||0) + s.eagles,
+                        bonusUnderPar: (data.bonusUnderPar||0) + (s.underPar?5:0),
+                        games: (data.games||0) + 1
+                    };
+
+                    // FIX: Si es nuevo, lo creamos directamente con los datos ya sumados
+                    if (s.isNew) {
+                         if (useCloud) {
+                             const doc = await pubRef.collection('players').add(newData);
+                             newData.id = doc.id;
+                         } else {
+                             newData.id = `loc_${Date.now()}_${i}`;
+                         }
+                         updatedPlayers.push(newData);
+                    } else {
+                         // Si existe, actualizamos
+                         const pIndex = updatedPlayers.findIndex(p => p.id === data.id);
+                         if(pIndex !== -1) updatedPlayers[pIndex] = newData;
+                         
+                         if (useCloud) {
+                             await pubRef.collection('players').doc(data.id).update({
+                                 handicap: nH,
+                                 scores: firebase.firestore.FieldValue.arrayUnion(Number(pts)),
+                                 birdies: firebase.firestore.FieldValue.increment(s.birdies),
+                                 eagles: firebase.firestore.FieldValue.increment(s.eagles),
+                                 bonusUnderPar: firebase.firestore.FieldValue.increment(s.underPar?5:0),
+                                 games: firebase.firestore.FieldValue.increment(1)
+                             });
+                         }
+                    }
                 }
                 
-                if (mode === 'cloud') { pubRef.collection('global_stats').doc('adjustments').set({history: adjs}); } 
+                if (useCloud) { pubRef.collection('global_stats').doc('adjustments').set({history: adjs}); } 
                 else { saveDataLocal(updatedPlayers, adjs); }
                 setSelectedForRound([]); setView('ranking');
             };
 
-            const ranking = useMemo(() => {
+            const rankingData = useMemo(() => {
                 const data = players.map(p => {
                     const sorted = [...(p.scores || [])].sort((a,b) => b-a);
                     const best = sorted.slice(0, MAX_COUNTED);
                     const pts = best.reduce((a,b) => Number(a)+Number(b), 0);
                     const bonus = (Number(p.birdies)||0) + (Number(p.eagles)||0)*2 + (Number(p.games)||0)*2 + (Number(p.bonusUnderPar)||0);
-                    return { ...p, total: pts + bonus };
+                    return { ...p, totalPoints: pts + bonus, posTotal: pts, bonusAccum: bonus, avg: p.games > 0 ? (pts / Math.min(p.games, MAX_COUNTED)).toFixed(1) : "0" };
                 });
                 return data.sort((a, b) => {
-                    if (sortConfig.key === 'total') return sortConfig.direction === 'desc' ? b.total - a.total : a.total - b.total;
+                    if (sortConfig.key === 'totalPoints') return sortConfig.direction === 'desc' ? b.totalPoints - a.totalPoints : a.totalPoints - b.totalPoints;
                     if (sortConfig.key === 'name') return sortConfig.direction === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
                     if (sortConfig.key === 'handicap') return sortConfig.direction === 'asc' ? a.handicap - b.handicap : b.handicap - a.handicap;
                 });
@@ -314,9 +345,10 @@
                 if(n&&h) {
                     const newP = { id: `man_${Date.now()}`, name: n.toUpperCase(), license: '', handicap: parseFloat(h.replace(',','.')), scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 };
                     if(useCloud) await db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('players').add(newP);
+                    else saveDataLocal([...players, newP], lastAdjustments);
                 }
             };
-            const deletePlayer = async (id) => { if(confirm("¿Borrar?")) { if(useCloud) await db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('players').doc(id).delete(); } };
+            const deletePlayer = async (id) => { if(confirm("¿Borrar?")) { if(useCloud) await db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('players').doc(id).delete(); else saveDataLocal(players.filter(p=>p.id!==id), lastAdjustments); } };
 
             if (status === 'loading') return <div className="h-screen bg-slate-950 flex items-center justify-center"><div className="w-10 h-10 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div></div>;
 
@@ -370,21 +402,26 @@
                                     </div>
                                 )}
                                 
-                                {ranking.length === 0 ? <div className="text-center p-10 text-slate-500 text-xs font-bold uppercase">Sin datos</div> : (
+                                {rankingData.length === 0 ? <div className="text-center p-10 text-slate-500 text-xs font-bold uppercase">Sin datos</div> : (
                                     <div className="bg-slate-900 rounded-2xl border border-white/5 overflow-hidden">
                                         <div className="flex bg-white/5 p-2 border-b border-white/5 text-[10px] font-bold text-slate-500 uppercase">
-                                            <button onClick={()=>handleSort('total')} className="flex-1 text-left p-2">Pos</button>
+                                            <button onClick={()=>handleSort('totalPoints')} className="flex-1 text-left p-2">Pos</button>
                                             <button onClick={()=>handleSort('name')} className="flex-[3] text-left p-2">Socio</button>
                                             <button onClick={()=>handleSort('handicap')} className="flex-1 text-center p-2">HCP</button>
-                                            <button onClick={()=>handleSort('total')} className="flex-1 text-right p-2">Pts</button>
+                                            <button onClick={()=>handleSort('totalPoints')} className="flex-1 text-right p-2">Pts</button>
                                         </div>
                                         <div className="divide-y divide-white/5">
-                                            {ranking.map((p,i) => (
+                                            {rankingData.map((p,i) => (
                                                 <div key={p.id} className="flex text-sm hover:bg-white/5 transition-colors">
                                                     <div className="flex-1 p-4 font-bold text-slate-500">{i+1}</div>
                                                     <div className="flex-[3] p-4 font-bold text-white truncate">{p.name} <div className="text-[10px] font-normal text-slate-500">{p.games} Partidas</div></div>
                                                     <div className="flex-1 p-4 text-center font-mono text-green-400">{p.handicap}</div>
-                                                    <div className="flex-1 p-4 text-right font-black text-lg text-white">{p.total}</div>
+                                                    <div className="flex-1 p-4 text-right font-black text-lg text-white">
+                                                        {p.totalPoints}
+                                                        <div className="text-[9px] text-slate-500 font-normal">
+                                                            Pos:{p.posTotal} + B:{p.bonusAccum}
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             ))}
                                         </div>
@@ -416,17 +453,12 @@
                                     
                                     // Cálculo provisional para mostrar en pantalla
                                     const activePlayers = selectedForRound.filter(rid => includedInSync[rid]);
-                                    // Buscar el índice real de este jugador dentro de los activos (ya ordenados)
-                                    // La posición real es su índice en el array filtrado + 1
                                     const realRankIndex = activePlayers.indexOf(id); 
                                     const realRank = realRankIndex + 1;
-                                    
                                     const numPlayers = activePlayers.length;
                                     const pointsTable = numPlayers>=11?[50,42,35,30,26,22,19,16,14,12,10,9,8]:numPlayers>=7?[35,29,24,20,17,14,12,10,8,7]:[20,16,12,9,7,5];
-                                    const posPoints = pointsTable[realRank-1] || 2;
-                                    
-                                    // Bonus provisional
-                                    const bonus = (s.birdies*1) + (s.eagles*2) + (s.underPar?5:0) + 2; // +2 asistencia
+                                    const posPoints = inc ? (pointsTable[realRank-1] || 2) : 0;
+                                    const bonus = (s.birdies*1) + (s.eagles*2) + (s.underPar?5:0) + 2; 
 
                                     return (
                                         <div key={id} className={`p-3 rounded-xl border flex justify-between items-center ${inc?'bg-white/5 border-white/10':'opacity-30 border-transparent'}`}>
@@ -435,7 +467,8 @@
                                                 <div>
                                                     <div className="font-bold text-sm">{s.name}</div>
                                                     <div className="text-[10px] text-slate-500">
-                                                        POS: {realRank}º • {s.birdies} BRD • <span className="text-green-400">Total: {posPoints + bonus} pts</span>
+                                                        POS: {realRank}º <span className="text-green-500 font-bold">(+{posPoints} pts)</span> + <span className="text-orange-400">Bonus: +{bonus}</span>
+                                                        {s.isNew && inc ? ' • NUEVO' : ''}
                                                     </div>
                                                 </div>
                                             </div>
@@ -463,6 +496,21 @@
                             </div>
                         )}
                     </main>
+
+                    {/* Footer Info */}
+                    <div className="fixed bottom-6 left-6 right-6 max-w-lg mx-auto pointer-events-none z-50">
+                        <div className="bg-slate-900/95 backdrop-blur-2xl border border-white/10 p-5 rounded-2xl shadow-2xl flex justify-between items-center px-10 border-green-500/10">
+                            <div className="flex items-center gap-4">
+                                <div className="bg-green-600/20 p-2 rounded-xl text-green-500 shadow-inner"><Icon name="ShieldCheck" className="w-5 h-5" /></div>
+                                <p className="text-[10px] font-black text-white uppercase italic tracking-tighter">
+                                    {useCloud ? 'Conexión Cloud Activa' : 'Modo Local (Sin Sync)'}
+                                </p>
+                            </div>
+                            <div className={`bg-${useCloud ? 'green' : 'orange'}-500/20 px-3 py-1 rounded-full`}>
+                                <div className={`w-1.5 h-1.5 bg-${useCloud ? 'green' : 'orange'}-500 rounded-full animate-pulse`}></div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             );
         };
