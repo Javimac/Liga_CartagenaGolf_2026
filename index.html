@@ -4,20 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tour Club 2026 - Liga de Golf</title>
-    
-    <!-- LIBRERÍAS (CDN) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@0.292.0/dist/umd/lucide.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
-    
-    <!-- FIREBASE SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
-
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #020617; color: #f8fafc; margin: 0; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
@@ -35,7 +30,7 @@
         const { useState, useEffect, useMemo } = React;
 
         // ------------------------------------------------------------------
-        // 🔐 TUS CREDENCIALES DE FIREBASE (YA INCLUIDAS)
+        // ⚠️ TUS CREDENCIALES
         // ------------------------------------------------------------------
         const manualConfig = {
             apiKey: "AIzaSyBqfSx5ulg2-X6BolLp7DACk6q4Y4-fEUw",
@@ -45,22 +40,31 @@
             messagingSenderId: "965701233208",
             appId: "1:965701233208:web:b8c54ce4071a30689614cd"
         };
-        // ------------------------------------------------------------------
-
         const currentAppId = "golf-tour-cartagena-2026-final";
-        let db, auth;
 
-        // Inicialización Forzada
-        try {
-            if (!firebase.apps.length) {
-                firebase.initializeApp(manualConfig);
-                console.log("Firebase inicializado con config manual.");
+        let db, auth;
+        let useCloud = false;
+
+        const initFirebase = () => {
+            try {
+                if (firebase.apps.length > 0) {
+                    const existingApp = firebase.app();
+                    if (existingApp.options.apiKey !== manualConfig.apiKey) {
+                        firebase.app().delete().then(() => initFirebase());
+                        return;
+                    }
+                } else {
+                    firebase.initializeApp(manualConfig);
+                }
+                db = firebase.firestore();
+                auth = firebase.auth();
+                useCloud = true;
+            } catch (e) {
+                console.warn("Fallo crítico inicializando Firebase:", e);
+                useCloud = false;
             }
-            db = firebase.firestore();
-            auth = firebase.auth();
-        } catch (e) {
-            console.error("Error crítico Firebase:", e);
-        }
+        };
+        initFirebase();
 
         const Icon = ({ name, className = "w-5 h-5" }) => {
             const [iconHtml, setIconHtml] = useState('');
@@ -101,8 +105,7 @@
             const [lastAdjustments, setLastAdjustments] = useState([]);
             const [user, setUser] = useState(null);
             const [status, setStatus] = useState('loading');
-            const [connectionStatus, setConnectionStatus] = useState('connecting'); // connecting, connected, error
-            
+            const [mode, setMode] = useState('loading'); 
             const [isAdmin, setIsAdmin] = useState(false);
             const [showLogin, setShowLogin] = useState(false);
             const [showRules, setShowRules] = useState(false);
@@ -111,109 +114,88 @@
             const [roundResults, setRoundResults] = useState({}); 
             const [roundStats, setRoundStats] = useState({});
             const [includedInSync, setIncludedInSync] = useState({}); 
-
+            const [sortConfig, setSortConfig] = useState({ key: 'totalPoints', direction: 'desc' });
             const ADMIN_PASS = "1234";
             const MAX_COUNTED = 50;
 
             useEffect(() => {
                 const initData = async () => {
-                    try {
-                        if (!auth) throw new Error("Firebase Auth no disponible");
-                        await auth.signInAnonymously();
-                        
-                        auth.onAuthStateChanged(u => {
-                            setUser(u);
-                            if (u) {
-                                const pubRef = db.collection('artifacts').doc(currentAppId).collection('public').doc('data');
-                                
-                                // Escuchar Jugadores
-                                pubRef.collection('players').onSnapshot(s => {
-                                    setPlayers(s.docs.map(d => ({id:d.id, ...d.data()})));
-                                    setStatus('ready');
-                                    setConnectionStatus('connected');
-                                }, err => {
-                                    console.error("Error leyendo Cloud:", err);
-                                    setConnectionStatus('error');
-                                });
-
-                                // Escuchar Ajustes
-                                pubRef.collection('global_stats').doc('adjustments').onSnapshot(d => {
-                                    if(d.exists) setLastAdjustments(d.data().history || []);
-                                });
-                            }
-                        });
-                    } catch (e) {
-                        console.error("Error conexión:", e);
-                        setConnectionStatus('error');
-                        setStatus('ready'); // Cargar interfaz aunque sea con error
-                    }
+                    const enableLocalMode = () => {
+                        setMode('local');
+                        const lp = localStorage.getItem('golf_players');
+                        const la = localStorage.getItem('golf_adjustments');
+                        if (lp) setPlayers(JSON.parse(lp));
+                        if (la) setLastAdjustments(JSON.parse(la));
+                        setStatus('ready');
+                    };
+                    if (useCloud && auth) {
+                        try {
+                            await auth.signInAnonymously();
+                            auth.onAuthStateChanged(u => {
+                                setUser(u);
+                                if (u) {
+                                    const pubRef = db.collection('artifacts').doc(currentAppId).collection('public').doc('data');
+                                    pubRef.collection('players').onSnapshot(s => {
+                                        setPlayers(s.docs.map(d => ({id:d.id, ...d.data()})));
+                                        setStatus('ready');
+                                        setMode('cloud');
+                                    }, err => { enableLocalMode(); });
+                                    pubRef.collection('global_stats').doc('adjustments').onSnapshot(d => {
+                                        if(d.exists) setLastAdjustments(d.data().history || []);
+                                    });
+                                }
+                            });
+                        } catch (e) { enableLocalMode(); }
+                    } else { enableLocalMode(); }
                 };
                 initData();
             }, []);
 
-            const resetSeason = async () => {
-                if (!confirm("⚠ ¿ESTÁS SEGURO? Esto borrará TODOS los datos de la nube.")) return;
-                if (prompt("Escribe 'BORRAR' para confirmar:") !== 'BORRAR') return;
+            const saveDataLocal = (newPlayers, newAdjustments) => {
+                localStorage.setItem('golf_players', JSON.stringify(newPlayers));
+                if (newAdjustments) localStorage.setItem('golf_adjustments', JSON.stringify(newAdjustments));
+                setPlayers(newPlayers);
+                if (newAdjustments) setLastAdjustments(newAdjustments);
+            };
 
+            const resetSeason = async () => {
+                if (!confirm("⚠ ¿BORRAR TODOS LOS DATOS?")) return;
+                if (prompt("Escribe 'BORRAR':") !== 'BORRAR') return;
                 setStatus('loading');
                 try {
-                    const batch = db.batch();
-                    const pubRef = db.collection('artifacts').doc(currentAppId).collection('public').doc('data');
-                    
-                    // Borrar Ajustes
-                    batch.delete(pubRef.collection('global_stats').doc('adjustments'));
-                    
-                    // Borrar Jugadores (Batching)
-                    const snap = await pubRef.collection('players').get();
-                    snap.docs.forEach(doc => batch.delete(doc.ref));
-                    
-                    await batch.commit();
-                    
-                    // Limpieza Local
                     localStorage.removeItem('golf_players');
-                    
-                    alert("Temporada reiniciada en la nube.");
+                    localStorage.removeItem('golf_adjustments');
+                    if (useCloud && db) {
+                        const batch = db.batch();
+                        const pubRef = db.collection('artifacts').doc(currentAppId).collection('public').doc('data');
+                        batch.delete(pubRef.collection('global_stats').doc('adjustments'));
+                        const snap = await pubRef.collection('players').get();
+                        snap.docs.forEach(doc => batch.delete(doc.ref));
+                        await batch.commit();
+                    }
+                    setPlayers([]);
+                    setLastAdjustments([]);
                     window.location.reload();
-                } catch (error) {
-                    alert("Error reiniciando: " + error.message);
-                    setStatus('ready');
-                }
+                } catch(e) { setStatus('ready'); alert("Error al borrar"); }
             };
 
             const handleFiles = (e) => {
                 const files = Array.from(e.target.files);
                 if (!files.length) return;
-                const allRows = [];
-                let processed = 0;
-
-                const readFile = (file) => {
-                    return new Promise((resolve) => {
-                        const reader = new FileReader();
-                        reader.onload = (ev) => {
-                            const data = new Uint8Array(ev.target.result);
-                            const workbook = XLSX.read(data, {type: 'array'});
-                            const sheet = workbook.Sheets[workbook.SheetNames[0]];
-                            const json = XLSX.utils.sheet_to_json(sheet, {header: 1});
-                            resolve(json);
-                        };
-                        reader.readAsArrayBuffer(file);
-                    });
-                };
-
-                files.forEach(async (file) => {
-                    try {
-                        const rows = await readFile(file);
-                        let startIdx = -1;
-                        for (let i=0; i<Math.min(rows.length, 20); i++) {
-                            const rowStr = (rows[i]||[]).join(' ').toLowerCase();
-                            if (rowStr.includes('licencia') && rowStr.includes('nombre')) { startIdx = i; break; }
-                        }
-                        if (startIdx !== -1) {
-                            rows.slice(startIdx + 1).forEach(row => { if (row.length > 5) allRows.push(row); });
-                        }
-                    } catch (err) { console.error(err); }
-                    processed++;
-                    if (processed === files.length && allRows.length > 0) processAllRows(allRows);
+                const readFile = (file) => new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                        const data = new Uint8Array(ev.target.result);
+                        const wb = XLSX.read(data, {type:'array'});
+                        const json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1});
+                        resolve(json);
+                    };
+                    reader.readAsArrayBuffer(file);
+                });
+                
+                Promise.all(files.map(readFile)).then(allSheets => {
+                    const allRows = allSheets.flat();
+                    if(allRows.length > 0) processAllRows(allRows);
                 });
             };
 
@@ -221,42 +203,33 @@
                 let extracted = rows.map(row => {
                     const lic = row[1] ? String(row[1]).trim() : "";
                     const rawName = row[3] ? String(row[3]).trim() : "";
-                    const hcpStr = row[4];
-                    const resStr = row[8];
-
                     if (!lic && !rawName) return null;
-
-                    let hcp = typeof hcpStr === 'number' ? hcpStr : parseFloat(String(hcpStr).replace(',','.')) || 18;
-                    let resTotal = (String(resStr).toUpperCase() === 'PAR') ? 0 : parseInt(resStr);
-                    if (isNaN(resTotal)) resTotal = 0;
-
+                    const hcp = parseFloat(String(row[4]).replace(',','.')) || 18;
+                    const resTotal = String(row[8]).toUpperCase() === 'PAR' ? 0 : parseInt(row[8]||0);
                     let b=0, eg=0;
                     if (row.length > 28) {
-                        for(let i=11; i<=28; i++) {
-                            const val = parseInt(row[i]);
-                            if (val === -1) b++;
-                            if (val === -2) eg++;
-                        }
+                        for(let k=11; k<=28; k++) { if(row[k] == -1) b++; if(row[k] == -2) eg++; }
                     }
-                    return { name: formatName(rawName), license: lic, handicap: hcp, score: resTotal, birdies: b, eagles: eg, underPar: resTotal < 0 };
-                }).filter(x => x !== null);
+                    return { name: formatName(rawName), license: lic, handicap: hcp, score: isNaN(resTotal)?999:resTotal, birdies: b, eagles: eg, underPar: resTotal < 0 };
+                }).filter(x => x!==null);
 
-                // Ordenar por resultado para asignar posición
-                extracted.sort((a, b) => {
+                extracted.sort((a,b) => {
                     if (a.score !== b.score) return a.score - b.score;
                     return a.handicap - b.handicap;
                 });
 
                 const res = {}, st = {}, sel = [], inc = {};
                 extracted.forEach((data, idx) => {
-                    let player = players.find(x => x.license === data.license || x.name === data.name);
-                    const id = player ? player.id : `new_${data.license || Math.random().toString(36).substr(2,5)}`;
-
-                    if (!sel.includes(id)) {
-                        sel.push(id); res[id] = idx + 1; inc[id] = true; st[id] = { ...data, isNew: !player };
+                    const pid = `p_${data.license}`;
+                    const existing = players.find(p => p.license === data.license);
+                    if (!sel.includes(pid)) {
+                        sel.push(pid);
+                        res[pid] = idx + 1; // Posición absoluta inicial
+                        inc[pid] = true;
+                        st[pid] = { ...data, isNew: !existing };
                     }
                 });
-
+                
                 setSelectedForRound(sel); setRoundResults(res); setRoundStats(st); setIncludedInSync(inc); setView('add');
             };
 
@@ -264,246 +237,232 @@
                 const toSync = selectedForRound.filter(id => includedInSync[id]);
                 if(!toSync.length) return alert("Selecciona jugadores");
                 
+                // Reordenar por la posición original para respetar el mérito deportivo
                 toSync.sort((a,b) => roundResults[a] - roundResults[b]);
+                
                 const num = toSync.length;
                 const table = num>=11?[50,42,35,30,26,22,19,16,14,12,10,9,8]:num>=7?[35,29,24,20,17,14,12,10,8,7]:[20,16,12,9,7,5];
                 
                 let updatedPlayers = [...players];
                 const adjs = [];
-                const pubRef = db.collection('artifacts').doc(currentAppId).collection('public').doc('data');
+                const pubRef = db ? db.collection('artifacts').doc(currentAppId).collection('public').doc('data') : null;
 
-                // Procesamiento secuencial para asegurar orden
-                setStatus('loading');
-                
-                try {
-                    for(const tid of toSync) {
-                        const s = roundStats[tid], pos = roundResults[tid];
-                        let pData;
-                        let pRef;
+                for (let i = 0; i < toSync.length; i++) {
+                    const tid = toSync[i];
+                    const s = roundStats[tid];
+                    const realRank = i + 1; 
 
-                        if(s.isNew) {
-                            // Crear nuevo documento en Cloud
-                            pData = { name: s.name, license: s.license, handicap: s.handicap, scores:[], birdies:0, eagles:0, bonusUnderPar:0, games:0 };
-                            const docRef = await pubRef.collection('players').add(pData);
-                            pData.id = docRef.id;
-                            pRef = docRef;
-                        } else {
-                            pData = players.find(x => x.id === tid);
-                            pRef = pubRef.collection('players').doc(pData.id);
-                        }
+                    let player = players.find(p => p.license === s.license);
+                    let ref, data;
 
-                        const pts = table[pos-1] || 2;
-                        let adj = pos===1?-0.4:pos===2?-0.2:pos===3?-0.1:0;
-                        if(s.underPar) adj -= 0.2;
-                        if(num>5 && pos>num-2) adj += 0.1;
-                        
-                        const nH = Math.max(0, Math.min(36, parseFloat((pData.handicap + adj).toFixed(1))));
-                        if(adj!==0) adjs.push({name: pData.name, change: Number(adj.toFixed(1))});
-                        
-                        // Actualizar en Cloud
-                        await pRef.update({
-                            handicap: nH,
-                            scores: firebase.firestore.FieldValue.arrayUnion(Number(pts)),
-                            birdies: firebase.firestore.FieldValue.increment(s.birdies),
-                            eagles: firebase.firestore.FieldValue.increment(s.eagles),
-                            bonusUnderPar: firebase.firestore.FieldValue.increment(s.underPar?5:0),
-                            games: firebase.firestore.FieldValue.increment(1)
-                        });
+                    if (!player) {
+                         const newP = { name: s.name, license: s.license, handicap: s.handicap, scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 };
+                        const doc = await pubRef.collection('players').add(newP);
+                        ref = doc; data = newP;
+                    } else {
+                        ref = pubRef.collection('players').doc(player.id);
+                        data = player;
                     }
 
-                    // Guardar ajustes globales
-                    await pubRef.collection('global_stats').doc('adjustments').set({history: adjs});
+                    const pts = table[realRank-1] || 2;
+                    let adj = 0;
+                    if(realRank===1) adj = -0.4;
+                    else if(realRank===2) adj = -0.2;
+                    else if(realRank===3) adj = -0.1;
+                    if(s.underPar) adj -= 0.2;
+                    if(num>5 && realRank>num-2) adj += 0.1;
                     
-                    setStatus('ready');
-                    setSelectedForRound([]); 
-                    setView('ranking');
-                    alert("Datos sincronizados con la nube correctamente.");
-
-                } catch (error) {
-                    console.error("Error sincronizando:", error);
-                    alert("Error de conexión al guardar. Comprueba internet.");
-                    setStatus('ready');
+                    const newHcp = Math.max(0, parseFloat((data.handicap + adj).toFixed(1)));
+                    if (adj !== 0) adjs.push({ name: s.name, change: adj, final: newHcp });
+                    
+                    const newScores = [...(data.scores||[]), Number(pts)];
+                    await ref.update({
+                        handicap: newHcp,
+                        scores: newScores,
+                        birdies: firebase.firestore.FieldValue.increment(s.birdies),
+                        eagles: firebase.firestore.FieldValue.increment(s.eagles),
+                        bonusUnderPar: firebase.firestore.FieldValue.increment(s.underPar?5:0),
+                        games: firebase.firestore.FieldValue.increment(1)
+                    });
                 }
+                
+                if (mode === 'cloud') { pubRef.collection('global_stats').doc('adjustments').set({history: adjs}); } 
+                else { saveDataLocal(updatedPlayers, adjs); }
+                setSelectedForRound([]); setView('ranking');
             };
 
-            const rankingData = useMemo(() => {
-                return players.map(p => {
-                    const sorted = [...(p.scores || [])].sort((a, b) => b - a);
+            const ranking = useMemo(() => {
+                const data = players.map(p => {
+                    const sorted = [...(p.scores || [])].sort((a,b) => b-a);
                     const best = sorted.slice(0, MAX_COUNTED);
-                    const posTotal = best.reduce((a, b) => Number(a) + Number(b), 0);
-                    const bonusTotal = (Number(p.birdies)||0) + (Number(p.eagles)||0)*2 + (Number(p.games)||0)*2 + (Number(p.bonusUnderPar)||0);
-                    return { ...p, totalPoints: posTotal + bonusTotal, avg: p.games > 0 ? (posTotal / Math.min(p.games, MAX_COUNTED)).toFixed(1) : "0" };
-                }).sort((a, b) => b.totalPoints - a.totalPoints);
-            }, [players]);
+                    const pts = best.reduce((a,b) => Number(a)+Number(b), 0);
+                    const bonus = (Number(p.birdies)||0) + (Number(p.eagles)||0)*2 + (Number(p.games)||0)*2 + (Number(p.bonusUnderPar)||0);
+                    return { ...p, total: pts + bonus };
+                });
+                return data.sort((a, b) => {
+                    if (sortConfig.key === 'total') return sortConfig.direction === 'desc' ? b.total - a.total : a.total - b.total;
+                    if (sortConfig.key === 'name') return sortConfig.direction === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
+                    if (sortConfig.key === 'handicap') return sortConfig.direction === 'asc' ? a.handicap - b.handicap : b.handicap - a.handicap;
+                });
+            }, [players, sortConfig]);
 
+            const handleSort = (key) => setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc' }));
             const handleLogin = (e) => { e.preventDefault(); if(password===ADMIN_PASS){setIsAdmin(true);setShowLogin(false);setPassword('')}else{alert("Clave incorrecta")} };
             const uncheckNewMembers = () => { const n = {...includedInSync}; selectedForRound.forEach(id => { if(roundStats[id].isNew) n[id] = false; }); setIncludedInSync(n); };
-            
             const addManualPlayer = async () => {
                 const n = prompt("Nombre:"); const h = prompt("HCP:");
                 if(n&&h) {
-                    await db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('players').add({
-                        name: n.toUpperCase(), license: '', handicap: parseFloat(h.replace(',','.')), scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0
-                    });
+                    const newP = { id: `man_${Date.now()}`, name: n.toUpperCase(), license: '', handicap: parseFloat(h.replace(',','.')), scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 };
+                    if(useCloud) await db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('players').add(newP);
                 }
             };
+            const deletePlayer = async (id) => { if(confirm("¿Borrar?")) { if(useCloud) await db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('players').doc(id).delete(); } };
 
-            const deletePlayer = async (id) => { 
-                if(confirm("¿Borrar de la nube?")) { 
-                    await db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('players').doc(id).delete();
-                } 
-            };
-
-            if (status === 'loading') return <div className="h-screen flex flex-col items-center justify-center bg-slate-950 gap-4"><div className="w-12 h-12 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div></div>;
+            if (status === 'loading') return <div className="h-screen bg-slate-950 flex items-center justify-center"><div className="w-10 h-10 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div></div>;
 
             return (
-                <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-                    <header className="bg-slate-900/80 border-b border-white/10 p-4 sticky top-0 z-50 backdrop-blur-md">
-                        <div className="max-w-5xl mx-auto flex justify-between items-center">
-                            <div className="flex items-center gap-3"><div className="bg-green-600 p-2 rounded-xl shadow-lg rotate-[-4deg]"><Icon name="Trophy" className="text-white w-5 h-5" /></div><div><h1 className="text-lg font-black italic uppercase tracking-tighter leading-none">Tour 2026</h1><p className="text-[9px] text-slate-500 font-bold uppercase mt-1 tracking-widest">Live Ranking</p></div></div>
-                            <div className="flex gap-2">
-                                <button onClick={()=>setShowRules(true)} className="px-3 py-2 rounded-xl border border-white/10 text-slate-400 font-black text-[10px] uppercase flex items-center gap-1 hover:bg-white/5"><Icon name="Info" className="w-3 h-3" /> Info</button>
-                                {!isAdmin ? (!showLogin ? (
-                                    <button onClick={()=>setShowLogin(true)} className="px-4 py-2 rounded-xl border border-green-600/30 text-green-500 font-black uppercase text-[10px] tracking-widest flex items-center gap-1 hover:bg-green-600/10"><Icon name="Lock" className="w-3 h-3" /> Acceso</button>
-                                ) : (
-                                    <form onSubmit={handleLogin} className="flex gap-2 animate-in"><input autoFocus type="password" placeholder="..." className="bg-slate-800 rounded-lg px-2 py-1 text-xs w-16" value={password} onChange={e=>setPassword(e.target.value)} /><button type="submit" className="bg-green-600 p-1.5 rounded-lg"><Icon name="CheckCircle2" className="w-4 h-4" /></button></form>
-                                )) : <button onClick={()=>setIsAdmin(false)} className="px-4 py-2 rounded-xl bg-orange-500 text-white font-black text-[10px] uppercase shadow-lg">Salir</button>}
-                            </div>
+                <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col max-w-5xl mx-auto">
+                    <header className="p-4 border-b border-white/10 flex justify-between items-center sticky top-0 bg-slate-950/80 backdrop-blur z-50">
+                        <div className="flex items-center gap-3">
+                            <div className="bg-green-600 p-2 rounded-lg shadow-lg rotate-[-3deg]"><Icon name="Trophy" className="text-white" /></div>
+                            <h1 className="text-xl font-black italic tracking-tighter">TOUR 2026</h1>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={()=>setShowRules(true)} className="bg-blue-600/20 text-blue-400 border border-blue-600/50 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase flex items-center gap-1 hover:bg-blue-600/30 transition-all shadow-lg"><Icon name="BookOpen" className="w-3 h-3" /> Bases</button>
+                            {!isAdmin ? (!showLogin ? (
+                                <button onClick={()=>setShowLogin(true)} className="text-[10px] font-black uppercase text-green-500 border border-green-500/30 px-3 py-1.5 rounded-lg">Capitán</button>
+                            ) : (
+                                <form onSubmit={handleLogin} className="flex gap-2"><input autoFocus type="password" placeholder="Clave" className="bg-slate-800 rounded px-2 text-xs w-20" value={password} onChange={e=>setPassword(e.target.value)}/><button className="text-green-500"><Icon name="CheckCircle2" /></button></form>
+                            )) : <button onClick={()=>setIsAdmin(false)} className="bg-red-500 text-white px-3 py-1 rounded text-xs font-bold">Salir</button>}
                         </div>
                     </header>
 
                     {showRules && (
-                        <div className="fixed inset-0 z-[100] modal-overlay flex items-center justify-center p-4 animate-in">
-                            <div className="bg-slate-900 border border-white/10 rounded-[2rem] w-full max-w-md p-8 relative shadow-2xl">
-                                <button onClick={()=>setShowRules(false)} className="absolute top-6 right-6 text-slate-500"><Icon name="X" /></button>
-                                <h2 className="text-2xl font-black uppercase italic mb-6 text-green-500 tracking-tighter">Reglas</h2>
-                                <div className="space-y-4 text-xs font-bold uppercase tracking-widest leading-relaxed text-slate-300">
-                                    <p className="p-3 bg-white/5 rounded-xl border-l-4 border-green-500">Major: 50 pts | Tour: 35 pts | Social: 20 pts</p>
-                                    <p className="p-3 bg-white/5 rounded-xl border-l-4 border-blue-500">Ranking: Cuentan las 50 mejores rondas.</p>
-                                    <p className="p-3 bg-white/5 rounded-xl border-l-4 border-orange-500">Bonus: Birdie (+1), Eagle (+2), UnderPar (+5).</p>
-                                    <p className="p-3 bg-white/5 rounded-xl border-l-4 border-red-500">HCP: -0.4 (1º), -0.2 (2º). Sube +0.1 (Últimos).</p>
+                        <div className="fixed inset-0 z-[100] modal-overlay flex items-center justify-center p-6 animate-in">
+                            <div className="bg-slate-900 border border-white/10 rounded-3xl w-full max-w-lg p-6 relative shadow-2xl max-h-[90vh] overflow-y-auto no-scrollbar">
+                                <button onClick={()=>setShowRules(false)} className="absolute top-4 right-4 bg-white/10 p-2 rounded-full hover:bg-white/20"><Icon name="X" className="w-5 h-5 text-white" /></button>
+                                <div className="text-center mb-6"><h2 className="text-2xl font-black uppercase italic text-blue-500 tracking-tighter">Bases del Tour 2026</h2><p className="text-xs text-slate-500 font-bold uppercase tracking-widest">Reglamento Oficial</p></div>
+                                <div className="space-y-6 text-sm">
+                                    <div className="p-4 bg-slate-800/50 rounded-2xl border border-white/5"><h3 className="font-bold text-white mb-2 flex items-center gap-2"><Icon name="Target" className="w-4 h-4 text-green-500" /> Puntos por Jornada</h3><div className="grid grid-cols-3 gap-2 text-center text-xs"><div className="bg-slate-950 p-2 rounded-lg border border-white/10"><p className="text-slate-500 mb-1">MAJOR (+11)</p><p className="font-black text-green-400 text-lg">50 pts</p></div><div className="bg-slate-950 p-2 rounded-lg border border-white/10"><p className="text-slate-500 mb-1">TOUR (7-10)</p><p className="font-black text-blue-400 text-lg">35 pts</p></div><div className="bg-slate-950 p-2 rounded-lg border border-white/10"><p className="text-slate-500 mb-1">SOCIAL (3-6)</p><p className="font-black text-orange-400 text-lg">20 pts</p></div></div></div>
+                                    <div className="p-4 bg-slate-800/50 rounded-2xl border border-white/5"><h3 className="font-bold text-white mb-2 flex items-center gap-2"><Icon name="Zap" className="w-4 h-4 text-orange-500" /> Bonus</h3><ul className="space-y-2 text-xs font-medium text-slate-300"><li className="flex justify-between border-b border-white/5 pb-1"><span>Birdie</span> <span className="text-green-400 font-bold">+1 pto</span></li><li className="flex justify-between border-b border-white/5 pb-1"><span>Eagle</span> <span className="text-orange-400 font-bold">+2 ptos</span></li><li className="flex justify-between border-b border-white/5 pb-1"><span>Under Par</span> <span className="text-blue-400 font-bold">+5 ptos</span></li><li className="flex justify-between"><span>Asistencia</span> <span className="text-slate-400 font-bold">+2 ptos</span></li></ul></div>
+                                    <div className="p-4 bg-slate-800/50 rounded-2xl border border-white/5"><h3 className="font-bold text-white mb-2 flex items-center gap-2"><Icon name="RefreshCw" className="w-4 h-4 text-purple-500" /> Hándicap Dinámico</h3><p className="text-xs text-slate-400 leading-relaxed">Ganador <strong>-0.4</strong>, 2º <strong>-0.2</strong>, 3º <strong>-0.1</strong>. Under Par <strong>-0.2 extra</strong>. Últimos <strong>+0.1</strong>.</p></div>
                                 </div>
-                                <button onClick={()=>setShowRules(false)} className="w-full bg-green-600 text-white font-black py-4 rounded-xl mt-6 text-xs uppercase">Cerrar</button>
+                                <button onClick={()=>setShowRules(false)} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-xl mt-6 uppercase text-xs tracking-widest shadow-lg transition-all">Cerrar</button>
                             </div>
                         </div>
                     )}
 
-                    <main className="max-w-5xl mx-auto p-4 md:p-6 pb-24 w-full flex-1">
+                    <main className="p-4 flex-1">
                         {isAdmin && (
-                            <div className="flex bg-white/5 p-1 rounded-2xl mb-8 border border-white/5 overflow-x-auto no-scrollbar animate-in">
-                                <button onClick={()=>setView('ranking')} className={`flex-1 py-3 px-4 rounded-xl text-[10px] font-black uppercase whitespace-nowrap ${view==='ranking'?'bg-white text-slate-900':'text-slate-500'}`}>Ranking</button>
-                                <button onClick={()=>setView('import')} className={`flex-1 py-3 px-4 rounded-xl text-[10px] font-black uppercase whitespace-nowrap ${view==='import'?'bg-blue-600 text-white':'text-slate-500'}`}>Importar</button>
-                                <button onClick={()=>setView('roster')} className={`flex-1 py-3 px-4 rounded-xl text-[10px] font-black uppercase whitespace-nowrap ${view==='roster'?'bg-purple-600 text-white':'text-slate-500'}`}>Plantilla</button>
-                                {selectedForRound.length>0 && <button onClick={()=>setView('add')} className={`flex-1 py-3 px-4 rounded-xl text-[10px] font-black uppercase whitespace-nowrap ${view==='add'?'bg-green-600 text-white':'text-slate-500'}`}>Validar</button>}
+                            <div className="flex bg-white/5 p-1 rounded-xl mb-6 gap-1 overflow-x-auto">
+                                <button onClick={()=>setView('ranking')} className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold ${view==='ranking'?'bg-white text-black':'text-slate-400'}`}>Ranking</button>
+                                <button onClick={()=>setView('import')} className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold ${view==='import'?'bg-blue-600 text-white':'text-slate-400'}`}>Importar</button>
+                                <button onClick={()=>setView('roster')} className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold ${view==='roster'?'bg-purple-600 text-white':'text-slate-400'}`}>Socios</button>
                             </div>
                         )}
 
                         {view === 'ranking' && (
-                            <div className="space-y-6 animate-in">
-                                {connectionStatus === 'error' && (
-                                    <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl text-center">
-                                        <p className="text-[10px] font-black text-red-500 uppercase tracking-widest">Error: No se conecta a la nube</p>
-                                        <p className="text-[9px] text-red-400 mt-1">Revisa que la Autenticación Anónima esté activada en Firebase Console</p>
-                                    </div>
-                                )}
+                            <div className="space-y-6">
                                 {lastAdjustments.length > 0 && (
-                                    <div className="bg-blue-600/10 border border-blue-600/30 p-5 rounded-2xl flex flex-wrap gap-2">
-                                        <div className="w-full text-[9px] font-black uppercase text-blue-400 mb-1 flex items-center gap-1"><Icon name="RefreshCw" className="w-3 h-3" /> Ajustes Recientes</div>
-                                        {lastAdjustments.map((a, i) => <div key={i} className="bg-slate-900/50 px-3 py-1.5 rounded-lg border border-white/5 text-[10px] font-bold"><span>{a.name}</span> <span className={a.change<0?'text-green-400':'text-red-400'}>{a.change>0?`+${a.change}`:a.change}</span></div>)}
+                                    <div className="bg-blue-900/20 p-4 rounded-2xl border border-blue-500/20 flex flex-wrap gap-2">
+                                        <div className="w-full text-[10px] uppercase font-bold text-blue-400 mb-1">Últimos Cambios HCP</div>
+                                        {lastAdjustments.map((a,i) => <span key={i} className="bg-slate-800 px-2 py-1 rounded text-xs"><b>{a.name}</b> {a.change>0?'+':''}{a.change}</span>)}
                                     </div>
                                 )}
-                                {rankingData.length === 0 ? (
-                                    <div className="p-20 text-center bg-slate-900/30 rounded-[3rem] border border-dashed border-white/10"><Icon name="Users" className="mb-4 text-slate-800 w-10 h-10 mx-auto" /><p className="text-slate-500 text-xs font-bold uppercase tracking-widest italic">Esperando jornada...</p></div>
-                                ) : (
-                                    <div className="bg-slate-900 border border-white/5 rounded-[2rem] overflow-hidden shadow-2xl">
-                                        <table className="w-full text-sm">
-                                            <thead className="bg-white/[0.02] text-[10px] uppercase text-slate-500 font-black border-b border-white/5 text-left"><tr><th className="px-6 py-4">Pos</th><th className="px-6 py-4">Socio</th><th className="px-6 py-4 text-center">HCP</th><th className="px-6 py-4 text-right">Pts</th></tr></thead>
-                                            <tbody className="divide-y divide-white/5 font-bold uppercase tracking-tight">
-                                                {rankingData.map((p, i) => (
-                                                    <tr key={p.id} className="hover:bg-white/[0.01]">
-                                                        <td className="px-6 py-5 text-slate-700 italic text-xl w-16">{i+1}</td>
-                                                        <td className="px-6 py-5 text-white truncate max-w-[150px]">{p.name} <span className="text-[9px] text-slate-600 ml-1 font-normal opacity-50">({p.games})</span></td>
-                                                        <td className="px-6 py-5 text-center font-mono text-green-400 text-xs">{p.handicap}</td>
-                                                        <td className="px-6 py-5 text-right text-lg text-white">{p.totalPoints}</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
+                                
+                                {ranking.length === 0 ? <div className="text-center p-10 text-slate-500 text-xs font-bold uppercase">Sin datos</div> : (
+                                    <div className="bg-slate-900 rounded-2xl border border-white/5 overflow-hidden">
+                                        <div className="flex bg-white/5 p-2 border-b border-white/5 text-[10px] font-bold text-slate-500 uppercase">
+                                            <button onClick={()=>handleSort('total')} className="flex-1 text-left p-2">Pos</button>
+                                            <button onClick={()=>handleSort('name')} className="flex-[3] text-left p-2">Socio</button>
+                                            <button onClick={()=>handleSort('handicap')} className="flex-1 text-center p-2">HCP</button>
+                                            <button onClick={()=>handleSort('total')} className="flex-1 text-right p-2">Pts</button>
+                                        </div>
+                                        <div className="divide-y divide-white/5">
+                                            {ranking.map((p,i) => (
+                                                <div key={p.id} className="flex text-sm hover:bg-white/5 transition-colors">
+                                                    <div className="flex-1 p-4 font-bold text-slate-500">{i+1}</div>
+                                                    <div className="flex-[3] p-4 font-bold text-white truncate">{p.name} <div className="text-[10px] font-normal text-slate-500">{p.games} Partidas</div></div>
+                                                    <div className="flex-1 p-4 text-center font-mono text-green-400">{p.handicap}</div>
+                                                    <div className="flex-1 p-4 text-right font-black text-lg text-white">{p.total}</div>
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
                                 )}
                             </div>
                         )}
 
-                        {view === 'roster' && isAdmin && (
-                            <div className="space-y-4 animate-in">
-                                <div className="flex gap-2">
-                                    <button onClick={addManualPlayer} className="flex-1 bg-purple-600 py-4 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all"><Icon name="PlusCircle" className="w-4 h-4" /> Nuevo Socio</button>
-                                    <button onClick={resetSeason} className="flex-1 bg-red-600 py-4 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all"><Icon name="Trash2" className="w-4 h-4" /> Reiniciar Temporada</button>
+                        {view === 'import' && (
+                            <div className="text-center py-10 bg-slate-900/50 rounded-3xl border border-dashed border-white/10">
+                                <Icon name="Upload" className="w-12 h-12 mx-auto text-blue-500 mb-4" />
+                                <h2 className="text-xl font-black italic mb-6">Subir Resultados</h2>
+                                <label className="bg-blue-600 px-6 py-3 rounded-xl font-bold text-xs uppercase cursor-pointer hover:bg-blue-500">
+                                    Seleccionar CSV / Excel
+                                    <input type="file" multiple className="hidden" accept=".csv, .xlsx" onChange={handleFiles} />
+                                </label>
+                                <p className="text-[10px] text-slate-500 mt-4 font-bold uppercase tracking-widest">Soporta Múltiples Archivos</p>
+                            </div>
+                        )}
+
+                        {view === 'add' && (
+                            <div className="space-y-4">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="font-bold text-green-500">Validar ({Object.values(includedInSync).filter(v=>v).length})</h2>
+                                    <button onClick={uncheckNewMembers} className="text-[10px] uppercase border border-orange-500/50 text-orange-500 px-3 py-1 rounded">Ignorar Invitados</button>
                                 </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    {players.sort((a,b)=>(a.name||"").localeCompare(b.name||"")).map(p => (
-                                        <div key={p.id} className="bg-slate-900/50 p-5 rounded-2xl border border-white/5 flex justify-between items-center group">
-                                            <div><p className="font-black text-sm uppercase text-white tracking-tight">{p.name}</p><p className="text-[10px] text-slate-500 font-bold uppercase">HCP: {p.handicap}</p></div>
-                                            <button onClick={() => deletePlayer(p.id)} className="p-2 text-slate-800 hover:text-red-500 transition-colors"><Icon name="Trash2" className="w-5 h-5" /></button>
+                                {selectedForRound.sort((a,b)=>roundResults[a]-roundResults[b]).map(id => {
+                                    const s = roundStats[id]; const inc = includedInSync[id];
+                                    
+                                    // Cálculo provisional para mostrar en pantalla
+                                    const activePlayers = selectedForRound.filter(rid => includedInSync[rid]);
+                                    // Buscar el índice real de este jugador dentro de los activos (ya ordenados)
+                                    // La posición real es su índice en el array filtrado + 1
+                                    const realRankIndex = activePlayers.indexOf(id); 
+                                    const realRank = realRankIndex + 1;
+                                    
+                                    const numPlayers = activePlayers.length;
+                                    const pointsTable = numPlayers>=11?[50,42,35,30,26,22,19,16,14,12,10,9,8]:numPlayers>=7?[35,29,24,20,17,14,12,10,8,7]:[20,16,12,9,7,5];
+                                    const posPoints = pointsTable[realRank-1] || 2;
+                                    
+                                    // Bonus provisional
+                                    const bonus = (s.birdies*1) + (s.eagles*2) + (s.underPar?5:0) + 2; // +2 asistencia
+
+                                    return (
+                                        <div key={id} className={`p-3 rounded-xl border flex justify-between items-center ${inc?'bg-white/5 border-white/10':'opacity-30 border-transparent'}`}>
+                                            <div className="flex items-center gap-3">
+                                                <input type="checkbox" checked={inc} onChange={()=>setIncludedInSync({...includedInSync, [id]:!inc})} />
+                                                <div>
+                                                    <div className="font-bold text-sm">{s.name}</div>
+                                                    <div className="text-[10px] text-slate-500">
+                                                        POS: {realRank}º • {s.birdies} BRD • <span className="text-green-400">Total: {posPoints + bonus} pts</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                                <button onClick={confirmRound} className="w-full bg-green-600 py-4 rounded-xl font-black uppercase text-sm mt-4 shadow-lg">Sincronizar</button>
+                            </div>
+                        )}
+
+                        {view === 'roster' && (
+                            <div className="space-y-4">
+                                <div className="flex gap-2">
+                                    <button onClick={addManualPlayer} className="flex-1 bg-purple-600 py-3 rounded-xl text-xs font-bold uppercase flex items-center justify-center gap-2"><Icon name="PlusCircle" className="w-4 h-4" /> Nuevo</button>
+                                    <button onClick={resetSeason} className="flex-1 bg-red-600/20 text-red-500 border border-red-600/50 py-3 rounded-xl text-xs font-bold uppercase flex items-center justify-center gap-2"><Icon name="Trash2" className="w-4 h-4" /> Reiniciar Liga</button>
+                                </div>
+                                <div className="grid gap-2">
+                                    {players.map(p => (
+                                        <div key={p.id} className="bg-slate-900 p-4 rounded-xl flex justify-between items-center border border-white/5">
+                                            <div><div className="font-bold text-sm">{p.name}</div><div className="text-[10px] text-slate-500">HCP: {p.handicap}</div></div>
+                                            <button onClick={()=>deletePlayer(p.id)} className="text-red-500"><Icon name="Trash2" className="w-4 h-4" /></button>
                                         </div>
                                     ))}
                                 </div>
                             </div>
                         )}
-
-                        {view === 'import' && isAdmin && (
-                            <div className="max-w-2xl mx-auto py-20 text-center bg-slate-900/30 rounded-[3rem] border border-white/5 border-dashed animate-in">
-                                <Icon name="Upload" className="w-12 h-12 text-blue-500 mx-auto mb-6 opacity-80" />
-                                <h2 className="text-2xl font-black italic uppercase mb-8 tracking-tighter">Subir Jornada</h2>
-                                <label className="bg-blue-600 text-white font-black py-5 px-10 rounded-2xl shadow-xl uppercase text-xs cursor-pointer inline-block active:scale-95 transition-all hover:bg-blue-500">
-                                    Seleccionar Archivos
-                                    <input type="file" multiple accept=".csv, .xlsx, .xls" onChange={handleFiles} className="hidden" />
-                                </label>
-                                <p className="text-[10px] text-slate-500 uppercase font-bold mt-8 flex items-center justify-center gap-2"><Icon name="Info" className="w-3 h-3" /> Soporta Selección Múltiple</p>
-                            </div>
-                        )}
-
-                        {view === 'add' && isAdmin && (
-                            <div className="max-w-3xl mx-auto space-y-4 animate-in">
-                                <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-black uppercase italic tracking-tighter text-green-500">Validar ({selectedForRound.length})</h2><button onClick={uncheckNewMembers} className="text-[9px] font-black uppercase text-orange-500 border border-orange-500/30 px-3 py-1.5 rounded-lg hover:bg-orange-500/10">Ignorar Invitados</button></div>
-                                {selectedForRound.sort((a,b)=>roundResults[a]-roundResults[b]).map(id => {
-                                    const s = roundStats[id]; const inc = includedInSync[id];
-                                    const numPlayers = Object.values(includedInSync).filter(v => v).length;
-                                    const pointsTable = numPlayers>=11?[50,42,35,30,26,22,19,16,14,12,10,9,8]:numPlayers>=7?[35,29,24,20,17,14,12,10,8,7]:[20,16,12,9,7,5];
-                                    const posPoints = pointsTable[roundResults[id]-1] || 2;
-                                    return (
-                                        <div key={id} className={`p-4 rounded-xl border transition-all flex justify-between items-center ${inc ? 'bg-white/5 border-white/10' : 'opacity-20 grayscale'}`}>
-                                            <div className="flex items-center gap-4">
-                                                <input type="checkbox" checked={inc} onChange={() => setIncludedInSync({...includedInSync, [id]: !inc})} />
-                                                <div>
-                                                    <p className="font-black text-sm uppercase text-white leading-none">{s.name}</p>
-                                                    <p className="text-[9px] font-bold text-slate-500 uppercase mt-1">
-                                                        POS: {roundResults[id]}º <span className="text-green-500">(+{posPoints} pts)</span> • {s.birdies} BRD {s.isNew && inc ? '• NUEVO' : ''}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                                <button onClick={confirmRound} className="w-full bg-green-600 text-white font-black py-5 rounded-2xl shadow-xl uppercase text-xs mt-10 active:scale-95 transition-all shadow-green-900/20">Sincronizar Datos 🔥</button>
-                            </div>
-                        )}
                     </main>
-
-                    {/* Footer Info */}
-                    <div className="fixed bottom-6 left-6 right-6 max-w-lg mx-auto pointer-events-none z-50">
-                        <div className="bg-slate-900/95 backdrop-blur-2xl border border-white/10 p-5 rounded-2xl shadow-2xl flex justify-between items-center px-10 border-green-500/10">
-                            <div className="flex items-center gap-4">
-                                <div className={`bg-${connectionStatus === 'error' ? 'red' : 'green'}-600/20 p-2 rounded-xl text-${connectionStatus === 'error' ? 'red' : 'green'}-500 shadow-inner`}><Icon name={connectionStatus === 'error' ? 'AlertCircle' : 'ShieldCheck'} className="w-5 h-5" /></div>
-                                <p className="text-[10px] font-black text-white uppercase italic tracking-tighter">
-                                    {connectionStatus === 'error' ? 'Error Conexión' : 'Conexión Cloud Activa'}
-                                </p>
-                            </div>
-                            <div className={`bg-${connectionStatus === 'error' ? 'red' : 'green'}-500/20 px-3 py-1 rounded-full`}>
-                                <div className={`w-1.5 h-1.5 bg-${connectionStatus === 'error' ? 'red' : 'green'}-500 rounded-full animate-pulse`}></div>
-                            </div>
-                        </div>
-                    </div>
                 </div>
             );
         };
