@@ -35,7 +35,7 @@
         const { useState, useEffect, useMemo } = React;
 
         // ------------------------------------------------------------------
-        // CONFIGURACIÓN FIREBASE
+        // ✅ TUS CREDENCIALES
         // ------------------------------------------------------------------
         const manualConfig = {
             apiKey: "AIzaSyBqfSx5ulg2-X6BolLp7DACk6q4Y4-fEUw",
@@ -47,60 +47,55 @@
         };
         const currentAppId = "golf-tour-cartagena-2026-final";
 
+        // Inicializar Firebase
         let db, auth;
         let useCloud = false;
 
-        try {
-            if (typeof firebase !== 'undefined') {
-                if (!firebase.apps.length) {
+        const initFirebase = () => {
+            try {
+                if (firebase.apps.length > 0) {
+                    const existingApp = firebase.app();
+                    if (existingApp.options.apiKey !== manualConfig.apiKey) {
+                        firebase.app().delete().then(() => initFirebase());
+                        return;
+                    }
+                } else {
                     firebase.initializeApp(manualConfig);
                 }
                 db = firebase.firestore();
                 auth = firebase.auth();
                 useCloud = true;
+            } catch (e) {
+                console.warn("Fallo crítico inicializando Firebase:", e);
+                useCloud = false;
             }
-        } catch (e) {
-            console.warn("Modo Local Activado:", e);
-            useCloud = false;
-        }
+        };
+        initFirebase();
 
-        // --- COMPONENTE ICONO SIMPLIFICADO ---
+        // --- ICONO BLINDADO (CORREGIDO) ---
         const Icon = ({ name, className = "w-5 h-5" }) => {
-            const [iconHtml, setIconHtml] = useState('');
-
+            const [svg, setSvg] = useState(null);
             useEffect(() => {
-                const getSvg = () => {
+                const load = () => {
                     if (window.lucide && window.lucide.icons && window.lucide.icons[name]) {
                         const iconData = window.lucide.icons[name];
-                        if (Array.isArray(iconData) && Array.isArray(iconData[1])) {
-                            const paths = iconData[1].map(child => {
-                                if (Array.isArray(child)) {
-                                    const tag = child[0];
-                                    const attrs = child[1] || {};
-                                    const attrStr = Object.keys(attrs).map(key => key + '="' + attrs[key] + '"').join(' ');
-                                    return '<' + tag + ' ' + attrStr + ' />';
-                                }
-                                return '';
+                        // Comprobamos índice 2 (nuevo) o 1 (antiguo) para evitar errores
+                        const children = Array.isArray(iconData[2]) ? iconData[2] : (Array.isArray(iconData[1]) ? iconData[1] : []);
+                        
+                        if (children.length > 0) {
+                            const paths = children.map(child => {
+                                const [tag, attrs] = child;
+                                const attrStr = Object.entries(attrs).map(([k,v]) => `${k}="${v}"`).join(' ');
+                                return `<${tag} ${attrStr} />`;
                             }).join('');
-                            return '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + paths + '</svg>';
+                            setSvg(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`);
                         }
                     }
-                    return '';
                 };
-
-                const svg = getSvg();
-                if (svg) setIconHtml(svg);
-
-                // Reintento breve por si el script carga tarde
-                const t = setTimeout(() => {
-                    const retrySvg = getSvg();
-                    if (retrySvg) setIconHtml(retrySvg);
-                }, 500);
-                
-                return () => clearTimeout(t);
+                load();
+                const t = setTimeout(load, 500); return () => clearTimeout(t);
             }, [name]);
-
-            return <span className={`inline-flex items-center justify-center ${className}`} dangerouslySetInnerHTML={{ __html: iconHtml }} />;
+            return svg ? <span className={`inline-flex items-center justify-center ${className}`} dangerouslySetInnerHTML={{ __html: svg }} /> : <span className={`inline-block w-5 h-5 bg-slate-800 rounded-full ${className}`}></span>;
         };
 
         const formatName = (raw) => {
@@ -127,6 +122,7 @@
             const [roundResults, setRoundResults] = useState({}); 
             const [roundStats, setRoundStats] = useState({});
             const [includedInSync, setIncludedInSync] = useState({}); 
+            
             const [sortConfig, setSortConfig] = useState({ key: 'totalPoints', direction: 'desc' });
 
             const ADMIN_PASS = "1234";
@@ -147,25 +143,18 @@
                     if (useCloud && auth) {
                         try {
                             await auth.signInAnonymously();
-                            auth.onAuthStateChanged(u => {
-                                setUser(u);
-                                if (u) {
-                                    const ref = db.collection('artifacts').doc(currentAppId).collection('public').doc('data');
-                                    ref.collection('players').onSnapshot(snap => {
-                                        const list = snap.docs.map(d => ({id: d.id, ...d.data()}));
-                                        setPlayers(list);
-                                        localStorage.setItem('golf_players', JSON.stringify(list));
-                                        setStatus('ready');
-                                        setMode('cloud');
-                                    }, err => { loadLocal(); });
+                            const ref = db.collection('artifacts').doc(currentAppId).collection('public').doc('data');
+                            ref.collection('players').onSnapshot(snap => {
+                                const list = snap.docs.map(d => ({id: d.id, ...d.data()}));
+                                setPlayers(list);
+                                localStorage.setItem('golf_players', JSON.stringify(list));
+                                setStatus('ready');
+                                setMode('cloud');
+                            }, err => { loadLocal(); });
 
-                                    ref.collection('global_stats').doc('adjustments').onSnapshot(d => {
-                                        if(d.exists) {
-                                            setLastAdjustments(d.data().history || []);
-                                        }
-                                    });
-                                } else {
-                                    loadLocal();
+                            ref.collection('global_stats').doc('adjustments').onSnapshot(d => {
+                                if(d.exists) {
+                                    setLastAdjustments(d.data().history || []);
                                 }
                             });
                         } catch (e) { loadLocal(); }
@@ -236,13 +225,19 @@
 
                     let hcp = parseFloat(String(row[4]).replace(',','.')) || 18;
                     let resTotal = String(row[8]).toUpperCase() === 'PAR' ? 0 : parseInt(row[8]||0);
-                    if (isNaN(resTotal)) resTotal = 999;
+                    if (isNaN(resTotal)) resTotal = 999; 
+
                     let b=0, eg=0;
                     for(let k=11; k<=28; k++) {
                         if(row[k] == -1) b++;
                         if(row[k] == -2) eg++;
                     }
-                    return { name, license: lic, handicap: hcp, score: resTotal, birdies: b, eagles: eg, underPar: resTotal < 0 };
+
+                    return { 
+                        name, license: lic, handicap: hcp, 
+                        score: resTotal, 
+                        birdies: b, eagles: eg, underPar: resTotal < 0 
+                    };
                 }).filter(x => x!==null);
 
                 extracted.sort((a,b) => {
@@ -261,6 +256,7 @@
                         st[pid] = { ...data, isNew: !existing };
                     }
                 });
+                
                 setSelectedForRound(sel); setRoundResults(res); setRoundStats(st); setIncludedInSync(inc); setView('add');
             };
 
@@ -288,7 +284,8 @@
                          const newP = { name: s.name, license: s.license, handicap: s.handicap, scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 };
                         if (useCloud) {
                             const doc = await pubRef.collection('players').add(newP);
-                            ref = doc; data = { ...newP, id: doc.id };
+                            ref = doc;
+                            data = { ...newP, id: doc.id };
                         } else {
                             newP.id = `loc_${Date.now()}_${i}`; data = newP; updatedPlayers.push(data);
                         }
@@ -308,7 +305,9 @@
                     const newHcp = Math.max(0, parseFloat((data.handicap + adj).toFixed(1)));
                     if (adj !== 0) adjs.push({ name: s.name, change: adj, final: newHcp });
                     
-                    const newScores = [...(data.scores||[]), Number(pts)];
+                    // FIX: Leer array actual y añadir valor (sin arrayUnion) para permitir duplicados
+                    const currentScores = data.scores || [];
+                    const newScores = [...currentScores, Number(pts)];
                     
                     const pIndex = updatedPlayers.findIndex(p => p.id === data.id);
                     if(pIndex !== -1) {
@@ -326,7 +325,7 @@
                     if (useCloud && ref) {
                         await ref.update({
                             handicap: newHcp,
-                            scores: newScores,
+                            scores: newScores, // SOBRESCRIBIR ARRAY COMPLETO
                             birdies: firebase.firestore.FieldValue.increment(s.birdies),
                             eagles: firebase.firestore.FieldValue.increment(s.eagles),
                             bonusUnderPar: firebase.firestore.FieldValue.increment(s.underPar?5:0),
@@ -437,7 +436,7 @@
                                                     <div className="flex-1 p-4 text-right font-black text-lg text-white">
                                                         {p.totalPoints}
                                                         <div className="text-[9px] text-slate-500 font-normal">
-                                                            P:{p.posTotal} + B:{p.bonusAccum}
+                                                            Pos:{p.posTotal} + B:{p.bonusAccum}
                                                         </div>
                                                     </div>
                                                 </div>
@@ -471,9 +470,6 @@
                                     
                                     // Cálculo provisional para mostrar en pantalla
                                     const activePlayers = selectedForRound.filter(rid => includedInSync[rid]);
-                                    // Re-ordenar activos por resultado para saber posición real
-                                    activePlayers.sort((a,b) => roundResults[a] - roundResults[b]);
-                                    
                                     const realRankIndex = activePlayers.indexOf(id); 
                                     const realRank = realRankIndex + 1;
                                     const numPlayers = activePlayers.length;
