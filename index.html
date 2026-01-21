@@ -4,16 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tour Club 2026 - Liga de Golf</title>
-    <!-- Tailwind CSS -->
+    
+    <!-- LIBRERÍAS (CDN) -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React & ReactDOM -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@0.292.0/dist/umd/lucide.min.js"></script>
-    <!-- SheetJS (Excel) -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
     
     <!-- FIREBASE SDK -->
@@ -38,7 +35,7 @@
         const { useState, useEffect, useMemo } = React;
 
         // ------------------------------------------------------------------
-        // 🔐 CREDENCIALES
+        // CONFIGURACIÓN FIREBASE
         // ------------------------------------------------------------------
         const manualConfig = {
             apiKey: "AIzaSyBqfSx5ulg2-X6BolLp7DACk6q4Y4-fEUw",
@@ -53,43 +50,57 @@
         let db, auth;
         let useCloud = false;
 
-        const initFirebase = () => {
-            try {
-                if (firebase.apps.length > 0) {
-                    const existingApp = firebase.app();
-                    if (existingApp.options.apiKey !== manualConfig.apiKey) {
-                        firebase.app().delete().then(() => initFirebase());
-                        return;
-                    }
-                } else {
+        try {
+            if (typeof firebase !== 'undefined') {
+                if (!firebase.apps.length) {
                     firebase.initializeApp(manualConfig);
                 }
                 db = firebase.firestore();
                 auth = firebase.auth();
                 useCloud = true;
-            } catch (e) {
-                console.warn("Fallo crítico inicializando Firebase:", e);
-                useCloud = false;
             }
-        };
-        initFirebase();
+        } catch (e) {
+            console.warn("Modo Local Activado:", e);
+            useCloud = false;
+        }
 
+        // --- COMPONENTE ICONO SIMPLIFICADO ---
         const Icon = ({ name, className = "w-5 h-5" }) => {
-            const [svg, setSvg] = useState(null);
+            const [iconHtml, setIconHtml] = useState('');
+
             useEffect(() => {
-                if (window.lucide && window.lucide.icons && window.lucide.icons[name]) {
-                    const iconData = window.lucide.icons[name];
-                    if (Array.isArray(iconData) && Array.isArray(iconData[1])) {
-                        const paths = iconData[1].map(child => {
-                            const [tag, attrs] = child;
-                            const attrStr = Object.entries(attrs || {}).map(([k,v]) => `${k}="${v}"`).join(' ');
-                            return `<${tag} ${attrStr} />`;
-                        }).join('');
-                        setSvg(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`);
+                const getSvg = () => {
+                    if (window.lucide && window.lucide.icons && window.lucide.icons[name]) {
+                        const iconData = window.lucide.icons[name];
+                        if (Array.isArray(iconData) && Array.isArray(iconData[1])) {
+                            const paths = iconData[1].map(child => {
+                                if (Array.isArray(child)) {
+                                    const tag = child[0];
+                                    const attrs = child[1] || {};
+                                    const attrStr = Object.keys(attrs).map(key => key + '="' + attrs[key] + '"').join(' ');
+                                    return '<' + tag + ' ' + attrStr + ' />';
+                                }
+                                return '';
+                            }).join('');
+                            return '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + paths + '</svg>';
+                        }
                     }
-                }
+                    return '';
+                };
+
+                const svg = getSvg();
+                if (svg) setIconHtml(svg);
+
+                // Reintento breve por si el script carga tarde
+                const t = setTimeout(() => {
+                    const retrySvg = getSvg();
+                    if (retrySvg) setIconHtml(retrySvg);
+                }, 500);
+                
+                return () => clearTimeout(t);
             }, [name]);
-            return svg ? <span className={`inline-flex items-center justify-center ${className}`} dangerouslySetInnerHTML={{ __html: svg }} /> : <span className={`inline-block w-5 h-5 bg-slate-800 rounded-full ${className}`}></span>;
+
+            return <span className={`inline-flex items-center justify-center ${className}`} dangerouslySetInnerHTML={{ __html: iconHtml }} />;
         };
 
         const formatName = (raw) => {
@@ -136,17 +147,25 @@
                     if (useCloud && auth) {
                         try {
                             await auth.signInAnonymously();
-                            const ref = db.collection('artifacts').doc(currentAppId).collection('public').doc('data');
-                            ref.collection('players').onSnapshot(snap => {
-                                const list = snap.docs.map(d => ({id: d.id, ...d.data()}));
-                                setPlayers(list);
-                                localStorage.setItem('golf_players', JSON.stringify(list));
-                                setStatus('ready');
-                            }, err => { loadLocal(); });
+                            auth.onAuthStateChanged(u => {
+                                setUser(u);
+                                if (u) {
+                                    const ref = db.collection('artifacts').doc(currentAppId).collection('public').doc('data');
+                                    ref.collection('players').onSnapshot(snap => {
+                                        const list = snap.docs.map(d => ({id: d.id, ...d.data()}));
+                                        setPlayers(list);
+                                        localStorage.setItem('golf_players', JSON.stringify(list));
+                                        setStatus('ready');
+                                        setMode('cloud');
+                                    }, err => { loadLocal(); });
 
-                            ref.collection('global_stats').doc('adjustments').onSnapshot(d => {
-                                if(d.exists) {
-                                    setLastAdjustments(d.data().history || []);
+                                    ref.collection('global_stats').doc('adjustments').onSnapshot(d => {
+                                        if(d.exists) {
+                                            setLastAdjustments(d.data().history || []);
+                                        }
+                                    });
+                                } else {
+                                    loadLocal();
                                 }
                             });
                         } catch (e) { loadLocal(); }
@@ -183,62 +202,29 @@
                 } catch(e) { setStatus('ready'); alert("Error al borrar"); }
             };
 
-            // --- MULTI CARGA REAL ---
-            const handleFiles = async (e) => {
-                const files = Array.from(e.target.files);
-                if (!files.length) return;
-
-                setStatus('loading'); // Bloqueo visual durante la carga
-                const allRows = [];
-
-                const readFilePromise = (file) => {
-                    return new Promise((resolve, reject) => {
-                        const reader = new FileReader();
-                        reader.onload = (ev) => {
-                            try {
-                                const data = new Uint8Array(ev.target.result);
-                                const wb = XLSX.read(data, {type:'array'});
-                                const ws = wb.Sheets[wb.SheetNames[0]];
-                                const json = XLSX.utils.sheet_to_json(ws, {header:1});
-                                resolve(json);
-                            } catch (err) {
-                                console.error("Error leyendo archivo:", file.name, err);
-                                resolve([]); // No fallar todo el proceso si uno falla
-                            }
-                        };
-                        reader.onerror = reject;
-                        reader.readAsArrayBuffer(file);
-                    });
+            const handleFiles = (e) => {
+                const files = e.target.files;
+                if (!files || !files.length) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    const data = new Uint8Array(ev.target.result);
+                    const wb = XLSX.read(data, {type:'array'});
+                    const ws = wb.Sheets[wb.SheetNames[0]];
+                    const json = XLSX.utils.sheet_to_json(ws, {header:1});
+                    processRows(json);
                 };
-
-                try {
-                    const sheets = await Promise.all(files.map(readFilePromise));
-                    
-                    // Procesar cada hoja
-                    sheets.forEach(rows => {
-                        // Buscar cabecera
-                        let start = -1;
-                        for(let i=0; i<Math.min(rows.length, 20); i++) {
-                            const s = (rows[i]||[]).join(' ').toLowerCase();
-                            if(s.includes('licencia') && s.includes('nombre')) { start = i; break; }
-                        }
-                        if(start !== -1) {
-                            rows.slice(start+1).forEach(row => { if (row.length > 5) allRows.push(row); });
-                        }
-                    });
-
-                    if (allRows.length > 0) processAllRows(allRows);
-                    else { alert("No se encontraron datos válidos en los archivos."); setStatus('ready'); }
-                    
-                } catch (error) {
-                    console.error(error);
-                    alert("Error procesando archivos.");
-                    setStatus('ready');
-                }
+                reader.readAsArrayBuffer(files[0]);
             };
 
-            const processAllRows = (rows) => {
-                let extracted = rows.map(row => {
+            const processRows = (rows) => {
+                let start = -1;
+                for(let i=0; i<Math.min(rows.length, 20); i++) {
+                    const s = (rows[i]||[]).join(' ').toLowerCase();
+                    if(s.includes('licencia') && s.includes('nombre')) { start = i; break; }
+                }
+                if(start === -1) return alert("CSV no válido. Usa 'Resultados HANDICAP'");
+
+                let extracted = rows.slice(start+1).map(row => {
                     if (!row[1] || !row[3]) return null;
                     const lic = String(row[1]).trim();
                     let name = String(row[3]).trim().replace(/"/g,'');
@@ -250,66 +236,39 @@
 
                     let hcp = parseFloat(String(row[4]).replace(',','.')) || 18;
                     let resTotal = String(row[8]).toUpperCase() === 'PAR' ? 0 : parseInt(row[8]||0);
-                    if (isNaN(resTotal)) resTotal = 999; 
-
+                    if (isNaN(resTotal)) resTotal = 999;
                     let b=0, eg=0;
                     for(let k=11; k<=28; k++) {
                         if(row[k] == -1) b++;
                         if(row[k] == -2) eg++;
                     }
-
-                    return { 
-                        name, license: lic, handicap: hcp, 
-                        score: resTotal, 
-                        birdies: b, eagles: eg, underPar: resTotal < 0 
-                    };
+                    return { name, license: lic, handicap: hcp, score: resTotal, birdies: b, eagles: eg, underPar: resTotal < 0 };
                 }).filter(x => x!==null);
 
-                // Unificar y Ordenar
-                // Creamos un mapa para fusionar duplicados (mismo jugador en 2 archivos)
-                const mergedPlayers = {};
-                
-                extracted.forEach(p => {
-                    if (!mergedPlayers[p.license]) {
-                        mergedPlayers[p.license] = p;
-                    } else {
-                        // Si ya existe, nos quedamos con el que tenga más datos de birdies (probablemente el archivo de Resultados)
-                        if (p.birdies > mergedPlayers[p.license].birdies || p.eagles > mergedPlayers[p.license].eagles) {
-                            mergedPlayers[p.license] = p;
-                        }
-                    }
-                });
-
-                // Convertir de nuevo a array y ordenar
-                const finalArray = Object.values(mergedPlayers);
-                finalArray.sort((a,b) => {
+                extracted.sort((a,b) => {
                     if (a.score !== b.score) return a.score - b.score;
                     return a.handicap - b.handicap;
                 });
 
                 const res = {}, st = {}, sel = [], inc = {};
-                
-                finalArray.forEach((data, idx) => {
+                extracted.forEach((data, idx) => {
+                    const pid = `p_${data.license}`;
                     const existing = players.find(p => p.license === data.license);
-                    const pid = existing ? existing.id : `new_${data.license}`;
-                    
-                    sel.push(pid);
-                    res[pid] = idx + 1; // Posición recalcula unificada
-                    inc[pid] = true;
-                    st[pid] = { ...data, isNew: !existing };
+                    if (!sel.includes(pid)) {
+                        sel.push(pid);
+                        res[pid] = idx + 1; 
+                        inc[pid] = true;
+                        st[pid] = { ...data, isNew: !existing };
+                    }
                 });
-                
                 setSelectedForRound(sel); setRoundResults(res); setRoundStats(st); setIncludedInSync(inc); setView('add');
-                setStatus('ready'); // Desbloquear UI
             };
 
             const confirmRound = async () => {
                 const toSync = selectedForRound.filter(id => includedInSync[id]);
                 if(!toSync.length) return alert("Selecciona jugadores");
                 
-                // Reordenar por la posición calculada
                 toSync.sort((a,b) => roundResults[a] - roundResults[b]);
-                
                 const num = toSync.length;
                 const table = num>=11?[50,42,35,30,26,22,19,16,14,12,10,9,8]:num>=7?[35,29,24,20,17,14,12,10,8,7]:[20,16,12,9,7,5];
                 
@@ -317,75 +276,67 @@
                 const adjs = [];
                 const pubRef = db ? db.collection('artifacts').doc(currentAppId).collection('public').doc('data') : null;
 
-                setStatus('loading'); // Bloquear mientras guarda
+                for (let i = 0; i < toSync.length; i++) {
+                    const tid = toSync[i];
+                    const s = roundStats[tid];
+                    const realRank = i + 1; 
 
-                try {
-                    for (let i = 0; i < toSync.length; i++) {
-                        const tid = toSync[i];
-                        const s = roundStats[tid];
-                        const realRank = i + 1; 
+                    let player = players.find(p => p.license === s.license);
+                    let ref, data;
 
-                        let player = players.find(p => p.license === s.license);
-                        let ref, data;
-
-                        if (!player) {
-                             const newP = { name: s.name, license: s.license, handicap: s.handicap, scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 };
-                            if (useCloud) {
-                                const doc = await pubRef.collection('players').add(newP);
-                                ref = doc; data = { ...newP, id: doc.id };
-                            } else {
-                                newP.id = `loc_${Date.now()}_${i}`; data = newP; updatedPlayers.push(data);
-                            }
+                    if (!player) {
+                         const newP = { name: s.name, license: s.license, handicap: s.handicap, scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 };
+                        if (useCloud) {
+                            const doc = await pubRef.collection('players').add(newP);
+                            ref = doc; data = { ...newP, id: doc.id };
                         } else {
-                            ref = useCloud ? pubRef.collection('players').doc(player.id) : null;
-                            data = player;
+                            newP.id = `loc_${Date.now()}_${i}`; data = newP; updatedPlayers.push(data);
                         }
-
-                        const pts = table[realRank-1] || 2;
-                        let adj = 0;
-                        if(realRank===1) adj = -0.4;
-                        else if(realRank===2) adj = -0.2;
-                        else if(realRank===3) adj = -0.1;
-                        if(s.underPar) adj -= 0.2;
-                        if(num>5 && realRank>num-2) adj += 0.1;
-                        
-                        const newHcp = Math.max(0, parseFloat((data.handicap + adj).toFixed(1)));
-                        if (adj !== 0) adjs.push({ name: s.name, change: adj, final: newHcp });
-                        
-                        const currentScores = data.scores || [];
-                        const newScores = [...currentScores, Number(pts)]; // Sobrescribir array
-
-                        // Actualizar Local
-                        const pIndex = updatedPlayers.findIndex(p => p.id === data.id);
-                        if(pIndex !== -1) {
-                            updatedPlayers[pIndex] = {
-                                ...data,
-                                handicap: newHcp,
-                                scores: newScores,
-                                birdies: (data.birdies||0) + s.birdies,
-                                eagles: (data.eagles||0) + s.eagles,
-                                bonusUnderPar: (data.bonusUnderPar||0) + (s.underPar?5:0),
-                                games: (data.games||0) + 1
-                            };
-                        }
-
-                        if (useCloud && ref) {
-                            await ref.update({
-                                handicap: newHcp,
-                                scores: newScores,
-                                birdies: firebase.firestore.FieldValue.increment(s.birdies),
-                                eagles: firebase.firestore.FieldValue.increment(s.eagles),
-                                bonusUnderPar: firebase.firestore.FieldValue.increment(s.underPar?5:0),
-                                games: firebase.firestore.FieldValue.increment(1)
-                            });
-                        }
+                    } else {
+                        ref = useCloud ? pubRef.collection('players').doc(player.id) : null;
+                        data = player;
                     }
-                    
-                    if (useCloud) { pubRef.collection('global_stats').doc('adjustments').set({history: adjs}); } 
-                    else { saveDataLocal(updatedPlayers, adjs); }
-                } catch(e) { console.error(e); }
 
-                setStatus('ready');
+                    const pts = table[realRank-1] || 2;
+                    let adj = 0;
+                    if(realRank===1) adj = -0.4;
+                    else if(realRank===2) adj = -0.2;
+                    else if(realRank===3) adj = -0.1;
+                    if(s.underPar) adj -= 0.2;
+                    if(num>5 && realRank>num-2) adj += 0.1;
+                    
+                    const newHcp = Math.max(0, parseFloat((data.handicap + adj).toFixed(1)));
+                    if (adj !== 0) adjs.push({ name: s.name, change: adj, final: newHcp });
+                    
+                    const newScores = [...(data.scores||[]), Number(pts)];
+                    
+                    const pIndex = updatedPlayers.findIndex(p => p.id === data.id);
+                    if(pIndex !== -1) {
+                         updatedPlayers[pIndex] = {
+                            ...data,
+                            handicap: newHcp,
+                            scores: newScores,
+                            birdies: (data.birdies||0) + s.birdies,
+                            eagles: (data.eagles||0) + s.eagles,
+                            bonusUnderPar: (data.bonusUnderPar||0) + (s.underPar?5:0),
+                            games: (data.games||0) + 1
+                         };
+                    }
+
+                    if (useCloud && ref) {
+                        await ref.update({
+                            handicap: newHcp,
+                            scores: newScores,
+                            birdies: firebase.firestore.FieldValue.increment(s.birdies),
+                            eagles: firebase.firestore.FieldValue.increment(s.eagles),
+                            bonusUnderPar: firebase.firestore.FieldValue.increment(s.underPar?5:0),
+                            games: firebase.firestore.FieldValue.increment(1)
+                        });
+                    }
+                }
+                
+                if (useCloud) { pubRef.collection('global_stats').doc('adjustments').set({history: adjs}); } 
+                else { saveDataLocal(updatedPlayers, adjs); }
                 setSelectedForRound([]); setView('ranking');
             };
 
@@ -486,7 +437,7 @@
                                                     <div className="flex-1 p-4 text-right font-black text-lg text-white">
                                                         {p.totalPoints}
                                                         <div className="text-[9px] text-slate-500 font-normal">
-                                                            Pos:{p.posTotal} + B:{p.bonusAccum}
+                                                            P:{p.posTotal} + B:{p.bonusAccum}
                                                         </div>
                                                     </div>
                                                 </div>
@@ -520,6 +471,9 @@
                                     
                                     // Cálculo provisional para mostrar en pantalla
                                     const activePlayers = selectedForRound.filter(rid => includedInSync[rid]);
+                                    // Re-ordenar activos por resultado para saber posición real
+                                    activePlayers.sort((a,b) => roundResults[a] - roundResults[b]);
+                                    
                                     const realRankIndex = activePlayers.indexOf(id); 
                                     const realRank = realRankIndex + 1;
                                     const numPlayers = activePlayers.length;
