@@ -4,16 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tour Club 2026 - Liga de Golf</title>
-    
-    <!-- LIBRERÍAS (CDN) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@0.292.0/dist/umd/lucide.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
-    
-    <!-- FIREBASE SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
@@ -35,7 +31,7 @@
         const { useState, useEffect, useMemo } = React;
 
         // ------------------------------------------------------------------
-        // ✅ TUS CREDENCIALES
+        // CONFIGURACIÓN FIREBASE
         // ------------------------------------------------------------------
         const manualConfig = {
             apiKey: "AIzaSyBqfSx5ulg2-X6BolLp7DACk6q4Y4-fEUw",
@@ -45,9 +41,7 @@
             messagingSenderId: "965701233208",
             appId: "1:965701233208:web:b8c54ce4071a30689614cd"
         };
-        const currentAppId = "golf-tour-cartagena-2026-final";
-
-        // Inicializar Firebase
+        const currentAppId = "golf-tour-cartagena-2026-unified-v3"; // ID Nuevo para asegurar consistencia
         let db, auth;
         let useCloud = false;
 
@@ -72,28 +66,19 @@
         };
         initFirebase();
 
-        // --- ICONO BLINDADO (CORREGIDO) ---
         const Icon = ({ name, className = "w-5 h-5" }) => {
             const [svg, setSvg] = useState(null);
             useEffect(() => {
-                const load = () => {
-                    if (window.lucide && window.lucide.icons && window.lucide.icons[name]) {
-                        const iconData = window.lucide.icons[name];
-                        // Comprobamos índice 2 (nuevo) o 1 (antiguo) para evitar errores
-                        const children = Array.isArray(iconData[2]) ? iconData[2] : (Array.isArray(iconData[1]) ? iconData[1] : []);
-                        
-                        if (children.length > 0) {
-                            const paths = children.map(child => {
-                                const [tag, attrs] = child;
-                                const attrStr = Object.entries(attrs).map(([k,v]) => `${k}="${v}"`).join(' ');
-                                return `<${tag} ${attrStr} />`;
-                            }).join('');
-                            setSvg(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`);
-                        }
-                    }
-                };
-                load();
-                const t = setTimeout(load, 500); return () => clearTimeout(t);
+                if (window.lucide && window.lucide.icons && window.lucide.icons[name]) {
+                    const iconData = window.lucide.icons[name];
+                    const children = Array.isArray(iconData[2]) ? iconData[2] : (Array.isArray(iconData[1]) ? iconData[1] : []);
+                    const paths = children.map(child => {
+                        const [tag, attrs] = child;
+                        const attrStr = Object.entries(attrs).map(([k,v]) => `${k}="${v}"`).join(' ');
+                        return `<${tag} ${attrStr} />`;
+                    }).join('');
+                    setSvg(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`);
+                }
             }, [name]);
             return svg ? <span className={`inline-flex items-center justify-center ${className}`} dangerouslySetInnerHTML={{ __html: svg }} /> : <span className={`inline-block w-5 h-5 bg-slate-800 rounded-full ${className}`}></span>;
         };
@@ -113,7 +98,6 @@
             const [lastAdjustments, setLastAdjustments] = useState([]);
             const [user, setUser] = useState(null);
             const [status, setStatus] = useState('loading');
-            const [mode, setMode] = useState('loading'); 
             const [isAdmin, setIsAdmin] = useState(false);
             const [showLogin, setShowLogin] = useState(false);
             const [showRules, setShowRules] = useState(false);
@@ -122,7 +106,6 @@
             const [roundResults, setRoundResults] = useState({}); 
             const [roundStats, setRoundStats] = useState({});
             const [includedInSync, setIncludedInSync] = useState({}); 
-            
             const [sortConfig, setSortConfig] = useState({ key: 'totalPoints', direction: 'desc' });
 
             const ADMIN_PASS = "1234";
@@ -149,13 +132,10 @@
                                 setPlayers(list);
                                 localStorage.setItem('golf_players', JSON.stringify(list));
                                 setStatus('ready');
-                                setMode('cloud');
                             }, err => { loadLocal(); });
 
                             ref.collection('global_stats').doc('adjustments').onSnapshot(d => {
-                                if(d.exists) {
-                                    setLastAdjustments(d.data().history || []);
-                                }
+                                if(d.exists) setLastAdjustments(d.data().history || []);
                             });
                         } catch (e) { loadLocal(); }
                     } else { loadLocal(); }
@@ -192,68 +172,138 @@
             };
 
             const handleFiles = (e) => {
-                const files = e.target.files;
-                if (!files || !files.length) return;
-                const reader = new FileReader();
-                reader.onload = (ev) => {
-                    const data = new Uint8Array(ev.target.result);
-                    const wb = XLSX.read(data, {type:'array'});
-                    const ws = wb.Sheets[wb.SheetNames[0]];
-                    const json = XLSX.utils.sheet_to_json(ws, {header:1});
-                    processRows(json);
+                const files = Array.from(e.target.files);
+                if (!files.length) return;
+                const allRows = [];
+                let processed = 0;
+
+                const readFile = (file) => {
+                    return new Promise((resolve) => {
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                            const data = new Uint8Array(ev.target.result);
+                            const wb = XLSX.read(data, {type:'array'});
+                            const ws = wb.Sheets[wb.SheetNames[0]];
+                            // Leemos con cabecera en fila 1 para procesar más fácil
+                            const json = XLSX.utils.sheet_to_json(ws, {header:1});
+                            resolve(json);
+                        };
+                        reader.readAsArrayBuffer(file);
+                    });
                 };
-                reader.readAsArrayBuffer(files[0]);
+
+                files.forEach(async (file) => {
+                    try {
+                        const rows = await readFile(file);
+                        // Buscar dinámicamente dónde empieza la tabla
+                        let startIdx = -1;
+                        let headerRow = [];
+                        
+                        for (let i=0; i<Math.min(rows.length, 25); i++) {
+                            const rowStr = (rows[i]||[]).map(c => String(c).toLowerCase()).join(' ');
+                            if (rowStr.includes('licencia') && rowStr.includes('nombre')) { 
+                                startIdx = i; 
+                                headerRow = rows[i].map(c => String(c).toLowerCase().trim());
+                                break; 
+                            }
+                        }
+
+                        if (startIdx !== -1) {
+                            // Mapear índices de columnas
+                            const idxLic = headerRow.indexOf('licencia');
+                            const idxName = headerRow.indexOf('nombre');
+                            const idxHcp = headerRow.findIndex(c => c.includes('hce') || c.includes('hcpe'));
+                            const idxRes = headerRow.findIndex(c => c.includes('total') || c.includes('neto'));
+                            
+                            // Añadimos datos normalizados
+                            rows.slice(startIdx + 1).forEach(row => { 
+                                if (row.length > 3) {
+                                    allRows.push({
+                                        rawName: row[idxName],
+                                        license: row[idxLic],
+                                        hcpStr: row[idxHcp],
+                                        resStr: row[idxRes],
+                                        fullRow: row // Guardamos para birdies
+                                    });
+                                }
+                            });
+                        }
+                    } catch (err) { console.error(err); }
+                    processed++;
+                    if (processed === files.length && allRows.length > 0) processAllRows(allRows);
+                });
             };
 
-            const processRows = (rows) => {
-                let start = -1;
-                for(let i=0; i<Math.min(rows.length, 20); i++) {
-                    const s = (rows[i]||[]).join(' ').toLowerCase();
-                    if(s.includes('licencia') && s.includes('nombre')) { start = i; break; }
-                }
-                if(start === -1) return alert("CSV no válido. Usa 'Resultados HANDICAP'");
-
-                let extracted = rows.slice(start+1).map(row => {
-                    if (!row[1] || !row[3]) return null;
-                    const lic = String(row[1]).trim();
-                    let name = String(row[3]).trim().replace(/"/g,'');
-                    if (name.includes(',')) {
-                        const [surn, n] = name.split(',');
-                        name = `${n.trim()} ${surn.trim()}`;
+            const processAllRows = (dataList) => {
+                let extracted = dataList.map(item => {
+                    if (!item.license && !item.rawName) return null;
+                    
+                    const lic = String(item.license || "").trim();
+                    const rawName = String(item.rawName || "").trim();
+                    
+                    // HCP
+                    let hcp = 18;
+                    if (item.hcpStr) hcp = typeof item.hcpStr === 'number' ? item.hcpStr : parseFloat(String(item.hcpStr).replace(',','.'));
+                    
+                    // Res Total
+                    let resTotal = 999;
+                    if (item.resStr) {
+                        const s = String(item.resStr).toUpperCase();
+                        if (s === 'PAR' || s === 'E') resTotal = 0;
+                        else resTotal = parseInt(s) || 999;
                     }
-                    name = name.toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
 
-                    let hcp = parseFloat(String(row[4]).replace(',','.')) || 18;
-                    let resTotal = String(row[8]).toUpperCase() === 'PAR' ? 0 : parseInt(row[8]||0);
-                    if (isNaN(resTotal)) resTotal = 999; 
-
+                    // Birdies (Indices fijos de hoyos aprox 11-28 en Resultados)
                     let b=0, eg=0;
-                    for(let k=11; k<=28; k++) {
-                        if(row[k] == -1) b++;
-                        if(row[k] == -2) eg++;
+                    if (item.fullRow.length > 20) {
+                        // Buscamos patrones de -1 y -2 en toda la fila por seguridad
+                        item.fullRow.forEach(cell => {
+                            if (cell === -1) b++;
+                            if (cell === -2) eg++;
+                        });
                     }
 
                     return { 
-                        name, license: lic, handicap: hcp, 
+                        name: formatName(rawName), 
+                        license: lic, 
+                        handicap: hcp, 
                         score: resTotal, 
                         birdies: b, eagles: eg, underPar: resTotal < 0 
                     };
                 }).filter(x => x!==null);
 
-                extracted.sort((a,b) => {
+                // FUSIONAR DUPLICADOS (Si sale en 2 archivos, sumamos birdies del mejor)
+                const mergedMap = new Map();
+                extracted.forEach(p => {
+                    const key = p.license || p.name;
+                    if (!mergedMap.has(key)) {
+                        mergedMap.set(key, p);
+                    } else {
+                        const existing = mergedMap.get(key);
+                        // Quedarse con el que tenga más birdies (significa que vino del archivo Resultados)
+                        if (p.birdies > existing.birdies) mergedMap.set(key, p);
+                    }
+                });
+                
+                const finalPlayers = Array.from(mergedMap.values());
+
+                // ORDENAR POR RESULTADO (UNIFICADO)
+                finalPlayers.sort((a,b) => {
                     if (a.score !== b.score) return a.score - b.score;
                     return a.handicap - b.handicap;
                 });
 
                 const res = {}, st = {}, sel = [], inc = {};
-                extracted.forEach((data, idx) => {
-                    const pid = `p_${data.license}`;
-                    const existing = players.find(p => p.license === data.license);
+                
+                finalPlayers.forEach((data, idx) => {
+                    let player = players.find(p => p.license === data.license || p.name === data.name);
+                    const pid = player ? player.id : `new_${data.license || Math.random()}`;
+                    
                     if (!sel.includes(pid)) {
                         sel.push(pid);
-                        res[pid] = idx + 1; 
+                        res[pid] = idx + 1; // POSICIÓN RECALCULADA
                         inc[pid] = true;
-                        st[pid] = { ...data, isNew: !existing };
+                        st[pid] = { ...data, isNew: !player };
                     }
                 });
                 
@@ -264,7 +314,9 @@
                 const toSync = selectedForRound.filter(id => includedInSync[id]);
                 if(!toSync.length) return alert("Selecciona jugadores");
                 
+                // Reordenar por la posición calculada
                 toSync.sort((a,b) => roundResults[a] - roundResults[b]);
+                
                 const num = toSync.length;
                 const table = num>=11?[50,42,35,30,26,22,19,16,14,12,10,9,8]:num>=7?[35,29,24,20,17,14,12,10,8,7]:[20,16,12,9,7,5];
                 
@@ -284,8 +336,7 @@
                          const newP = { name: s.name, license: s.license, handicap: s.handicap, scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 };
                         if (useCloud) {
                             const doc = await pubRef.collection('players').add(newP);
-                            ref = doc;
-                            data = { ...newP, id: doc.id };
+                            ref = doc; data = { ...newP, id: doc.id };
                         } else {
                             newP.id = `loc_${Date.now()}_${i}`; data = newP; updatedPlayers.push(data);
                         }
@@ -305,9 +356,7 @@
                     const newHcp = Math.max(0, parseFloat((data.handicap + adj).toFixed(1)));
                     if (adj !== 0) adjs.push({ name: s.name, change: adj, final: newHcp });
                     
-                    // FIX: Leer array actual y añadir valor (sin arrayUnion) para permitir duplicados
-                    const currentScores = data.scores || [];
-                    const newScores = [...currentScores, Number(pts)];
+                    const newScores = [...(data.scores||[]), Number(pts)];
                     
                     const pIndex = updatedPlayers.findIndex(p => p.id === data.id);
                     if(pIndex !== -1) {
@@ -325,7 +374,7 @@
                     if (useCloud && ref) {
                         await ref.update({
                             handicap: newHcp,
-                            scores: newScores, // SOBRESCRIBIR ARRAY COMPLETO
+                            scores: newScores,
                             birdies: firebase.firestore.FieldValue.increment(s.birdies),
                             eagles: firebase.firestore.FieldValue.increment(s.eagles),
                             bonusUnderPar: firebase.firestore.FieldValue.increment(s.underPar?5:0),
@@ -368,6 +417,11 @@
             const deletePlayer = async (id) => { if(confirm("¿Borrar?")) { if(useCloud) await db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('players').doc(id).delete(); else saveDataLocal(players.filter(p=>p.id!==id), lastAdjustments); } };
 
             if (status === 'loading') return <div className="h-screen bg-slate-950 flex items-center justify-center"><div className="w-10 h-10 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div></div>;
+
+            // --- RENDER VISUAL ---
+            // Creamos una copia segura para ordenar en el render
+            const playersToRender = [...selectedForRound].filter(id => roundResults[id] !== undefined);
+            playersToRender.sort((a,b) => roundResults[a] - roundResults[b]);
 
             return (
                 <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col max-w-5xl mx-auto">
@@ -465,11 +519,11 @@
                                     <h2 className="font-bold text-green-500">Validar ({Object.values(includedInSync).filter(v=>v).length})</h2>
                                     <button onClick={uncheckNewMembers} className="text-[10px] uppercase border border-orange-500/50 text-orange-500 px-3 py-1 rounded">Ignorar Invitados</button>
                                 </div>
-                                {selectedForRound.sort((a,b)=>roundResults[a]-roundResults[b]).map(id => {
+                                {playersToRender.map(id => {
                                     const s = roundStats[id]; const inc = includedInSync[id];
                                     
                                     // Cálculo provisional para mostrar en pantalla
-                                    const activePlayers = selectedForRound.filter(rid => includedInSync[rid]);
+                                    const activePlayers = playersToRender.filter(rid => includedInSync[rid]);
                                     const realRankIndex = activePlayers.indexOf(id); 
                                     const realRank = realRankIndex + 1;
                                     const numPlayers = activePlayers.length;
