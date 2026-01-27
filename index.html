@@ -4,12 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tour Club 2026 - Liga de Golf</title>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@0.292.0/dist/umd/lucide.min.js"></script>
+    <!-- SheetJS (Excel) -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    
+    <!-- FIREBASE SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
@@ -31,7 +38,7 @@
         const { useState, useEffect, useMemo } = React;
 
         // ------------------------------------------------------------------
-        // CONFIGURACIÓN FIREBASE
+        // 🔐 TUS CREDENCIALES
         // ------------------------------------------------------------------
         const manualConfig = {
             apiKey: "AIzaSyBqfSx5ulg2-X6BolLp7DACk6q4Y4-fEUw",
@@ -41,7 +48,8 @@
             messagingSenderId: "965701233208",
             appId: "1:965701233208:web:b8c54ce4071a30689614cd"
         };
-        const currentAppId = "golf-tour-cartagena-2026-unified-v3"; // ID Nuevo para asegurar consistencia
+        const currentAppId = "golf-tour-cartagena-2026-final";
+
         let db, auth;
         let useCloud = false;
 
@@ -71,13 +79,14 @@
             useEffect(() => {
                 if (window.lucide && window.lucide.icons && window.lucide.icons[name]) {
                     const iconData = window.lucide.icons[name];
-                    const children = Array.isArray(iconData[2]) ? iconData[2] : (Array.isArray(iconData[1]) ? iconData[1] : []);
-                    const paths = children.map(child => {
-                        const [tag, attrs] = child;
-                        const attrStr = Object.entries(attrs).map(([k,v]) => `${k}="${v}"`).join(' ');
-                        return `<${tag} ${attrStr} />`;
-                    }).join('');
-                    setSvg(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`);
+                    if (Array.isArray(iconData) && Array.isArray(iconData[1])) {
+                        const paths = iconData[1].map(child => {
+                            const [tag, attrs] = child;
+                            const attrStr = Object.entries(attrs).map(([k,v]) => `${k}="${v}"`).join(' ');
+                            return `<${tag} ${attrStr} />`;
+                        }).join('');
+                        setSvg(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`);
+                    }
                 }
             }, [name]);
             return svg ? <span className={`inline-flex items-center justify-center ${className}`} dangerouslySetInnerHTML={{ __html: svg }} /> : <span className={`inline-block w-5 h-5 bg-slate-800 rounded-full ${className}`}></span>;
@@ -98,6 +107,7 @@
             const [lastAdjustments, setLastAdjustments] = useState([]);
             const [user, setUser] = useState(null);
             const [status, setStatus] = useState('loading');
+            const [mode, setMode] = useState('loading'); 
             const [isAdmin, setIsAdmin] = useState(false);
             const [showLogin, setShowLogin] = useState(false);
             const [showRules, setShowRules] = useState(false);
@@ -110,6 +120,12 @@
 
             const ADMIN_PASS = "1234";
             const MAX_COUNTED = 50;
+
+            // --- TABLA DE PUNTOS UNIFICADA (Estándar 2026) ---
+            const POINTS_TABLE = [
+                50, 40, 32, 26, 22, 19, 16, 14, 12, 10, 
+                9, 8, 7, 6, 5, 4, 3, 2 // Del 11º al 18º
+            ]; // Resto 2 puntos
 
             useEffect(() => {
                 const load = async () => {
@@ -132,10 +148,13 @@
                                 setPlayers(list);
                                 localStorage.setItem('golf_players', JSON.stringify(list));
                                 setStatus('ready');
+                                setMode('cloud');
                             }, err => { loadLocal(); });
 
                             ref.collection('global_stats').doc('adjustments').onSnapshot(d => {
-                                if(d.exists) setLastAdjustments(d.data().history || []);
+                                if(d.exists) {
+                                    setLastAdjustments(d.data().history || []);
+                                }
                             });
                         } catch (e) { loadLocal(); }
                     } else { loadLocal(); }
@@ -184,7 +203,6 @@
                             const data = new Uint8Array(ev.target.result);
                             const wb = XLSX.read(data, {type:'array'});
                             const ws = wb.Sheets[wb.SheetNames[0]];
-                            // Leemos con cabecera en fila 1 para procesar más fácil
                             const json = XLSX.utils.sheet_to_json(ws, {header:1});
                             resolve(json);
                         };
@@ -195,38 +213,13 @@
                 files.forEach(async (file) => {
                     try {
                         const rows = await readFile(file);
-                        // Buscar dinámicamente dónde empieza la tabla
                         let startIdx = -1;
-                        let headerRow = [];
-                        
-                        for (let i=0; i<Math.min(rows.length, 25); i++) {
-                            const rowStr = (rows[i]||[]).map(c => String(c).toLowerCase()).join(' ');
-                            if (rowStr.includes('licencia') && rowStr.includes('nombre')) { 
-                                startIdx = i; 
-                                headerRow = rows[i].map(c => String(c).toLowerCase().trim());
-                                break; 
-                            }
+                        for (let i=0; i<Math.min(rows.length, 20); i++) {
+                            const s = (rows[i]||[]).join(' ').toLowerCase();
+                            if(s.includes('licencia') && s.includes('nombre')) { startIdx = i; break; }
                         }
-
                         if (startIdx !== -1) {
-                            // Mapear índices de columnas
-                            const idxLic = headerRow.indexOf('licencia');
-                            const idxName = headerRow.indexOf('nombre');
-                            const idxHcp = headerRow.findIndex(c => c.includes('hce') || c.includes('hcpe'));
-                            const idxRes = headerRow.findIndex(c => c.includes('total') || c.includes('neto'));
-                            
-                            // Añadimos datos normalizados
-                            rows.slice(startIdx + 1).forEach(row => { 
-                                if (row.length > 3) {
-                                    allRows.push({
-                                        rawName: row[idxName],
-                                        license: row[idxLic],
-                                        hcpStr: row[idxHcp],
-                                        resStr: row[idxRes],
-                                        fullRow: row // Guardamos para birdies
-                                    });
-                                }
-                            });
+                            rows.slice(startIdx + 1).forEach(row => { if (row.length > 5) allRows.push(row); });
                         }
                     } catch (err) { console.error(err); }
                     processed++;
@@ -234,76 +227,40 @@
                 });
             };
 
-            const processAllRows = (dataList) => {
-                let extracted = dataList.map(item => {
-                    if (!item.license && !item.rawName) return null;
-                    
-                    const lic = String(item.license || "").trim();
-                    const rawName = String(item.rawName || "").trim();
-                    
-                    // HCP
-                    let hcp = 18;
-                    if (item.hcpStr) hcp = typeof item.hcpStr === 'number' ? item.hcpStr : parseFloat(String(item.hcpStr).replace(',','.'));
-                    
-                    // Res Total
-                    let resTotal = 999;
-                    if (item.resStr) {
-                        const s = String(item.resStr).toUpperCase();
-                        if (s === 'PAR' || s === 'E') resTotal = 0;
-                        else resTotal = parseInt(s) || 999;
-                    }
+            const processAllRows = (rows) => {
+                let extracted = rows.map(row => {
+                    const lic = row[1] ? String(row[1]).trim() : "";
+                    const rawName = row[3] ? String(row[3]).trim() : "";
+                    const hcpStr = row[4];
+                    const resStr = row[8];
+                    if (!lic && !rawName) return null;
 
-                    // Birdies (Indices fijos de hoyos aprox 11-28 en Resultados)
+                    let hcp = parseFloat(String(hcpStr).replace(',','.')) || 18;
+                    let resTotal = String(resStr).toUpperCase() === 'PAR' ? 0 : parseInt(resStr);
+                    if (isNaN(resTotal)) resTotal = 999;
                     let b=0, eg=0;
-                    if (item.fullRow.length > 20) {
-                        // Buscamos patrones de -1 y -2 en toda la fila por seguridad
-                        item.fullRow.forEach(cell => {
-                            if (cell === -1) b++;
-                            if (cell === -2) eg++;
-                        });
+                    for(let k=11; k<=28; k++) {
+                        if(row[k] == -1) b++;
+                        if(row[k] == -2) eg++;
                     }
-
-                    return { 
-                        name: formatName(rawName), 
-                        license: lic, 
-                        handicap: hcp, 
-                        score: resTotal, 
-                        birdies: b, eagles: eg, underPar: resTotal < 0 
-                    };
+                    return { name: formatName(rawName), license: lic, handicap: hcp, score: resTotal, birdies: b, eagles: eg, underPar: resTotal < 0 };
                 }).filter(x => x!==null);
 
-                // FUSIONAR DUPLICADOS (Si sale en 2 archivos, sumamos birdies del mejor)
-                const mergedMap = new Map();
-                extracted.forEach(p => {
-                    const key = p.license || p.name;
-                    if (!mergedMap.has(key)) {
-                        mergedMap.set(key, p);
-                    } else {
-                        const existing = mergedMap.get(key);
-                        // Quedarse con el que tenga más birdies (significa que vino del archivo Resultados)
-                        if (p.birdies > existing.birdies) mergedMap.set(key, p);
-                    }
-                });
-                
-                const finalPlayers = Array.from(mergedMap.values());
-
-                // ORDENAR POR RESULTADO (UNIFICADO)
-                finalPlayers.sort((a,b) => {
+                // Ordenar por Resultado NETO (Medal Play)
+                extracted.sort((a,b) => {
                     if (a.score !== b.score) return a.score - b.score;
                     return a.handicap - b.handicap;
                 });
 
                 const res = {}, st = {}, sel = [], inc = {};
-                
-                finalPlayers.forEach((data, idx) => {
-                    let player = players.find(p => p.license === data.license || p.name === data.name);
-                    const pid = player ? player.id : `new_${data.license || Math.random()}`;
-                    
+                extracted.forEach((data, idx) => {
+                    const pid = `p_${data.license}`;
+                    const existing = players.find(p => p.license === data.license);
                     if (!sel.includes(pid)) {
                         sel.push(pid);
-                        res[pid] = idx + 1; // POSICIÓN RECALCULADA
+                        res[pid] = idx + 1; 
                         inc[pid] = true;
-                        st[pid] = { ...data, isNew: !player };
+                        st[pid] = { ...data, isNew: !existing };
                     }
                 });
                 
@@ -318,7 +275,7 @@
                 toSync.sort((a,b) => roundResults[a] - roundResults[b]);
                 
                 const num = toSync.length;
-                const table = num>=11?[50,42,35,30,26,22,19,16,14,12,10,9,8]:num>=7?[35,29,24,20,17,14,12,10,8,7]:[20,16,12,9,7,5];
+                // YA NO HAY CATEGORIAS, USAMOS LA TABLA UNIFICADA
                 
                 let updatedPlayers = [...players];
                 const adjs = [];
@@ -345,7 +302,9 @@
                         data = player;
                     }
 
-                    const pts = table[realRank-1] || 2;
+                    // Puntos unificados
+                    const pts = POINTS_TABLE[realRank-1] || 2;
+                    
                     let adj = 0;
                     if(realRank===1) adj = -0.4;
                     else if(realRank===2) adj = -0.2;
@@ -393,7 +352,8 @@
                     const sorted = [...(p.scores || [])].sort((a,b) => b-a);
                     const best = sorted.slice(0, MAX_COUNTED);
                     const pts = best.reduce((a,b) => Number(a)+Number(b), 0);
-                    const bonus = (Number(p.birdies)||0) + (Number(p.eagles)||0)*2 + (Number(p.games)||0)*2 + (Number(p.bonusUnderPar)||0);
+                    // SIN ASISTENCIA (+0 en games)
+                    const bonus = (Number(p.birdies)||0) + (Number(p.eagles)||0)*2 + (Number(p.bonusUnderPar)||0);
                     return { ...p, totalPoints: pts + bonus, posTotal: pts, bonusAccum: bonus, avg: p.games > 0 ? (pts / Math.min(p.games, MAX_COUNTED)).toFixed(1) : "0" };
                 });
                 return data.sort((a, b) => {
@@ -418,11 +378,6 @@
 
             if (status === 'loading') return <div className="h-screen bg-slate-950 flex items-center justify-center"><div className="w-10 h-10 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div></div>;
 
-            // --- RENDER VISUAL ---
-            // Creamos una copia segura para ordenar en el render
-            const playersToRender = [...selectedForRound].filter(id => roundResults[id] !== undefined);
-            playersToRender.sort((a,b) => roundResults[a] - roundResults[b]);
-
             return (
                 <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col max-w-5xl mx-auto">
                     <header className="p-4 border-b border-white/10 flex justify-between items-center sticky top-0 bg-slate-950/80 backdrop-blur z-50">
@@ -446,8 +401,18 @@
                                 <button onClick={()=>setShowRules(false)} className="absolute top-4 right-4 bg-white/10 p-2 rounded-full hover:bg-white/20"><Icon name="X" className="w-5 h-5 text-white" /></button>
                                 <div className="text-center mb-6"><h2 className="text-2xl font-black uppercase italic text-blue-500 tracking-tighter">Bases del Tour 2026</h2><p className="text-xs text-slate-500 font-bold uppercase tracking-widest">Reglamento Oficial</p></div>
                                 <div className="space-y-6 text-sm">
-                                    <div className="p-4 bg-slate-800/50 rounded-2xl border border-white/5"><h3 className="font-bold text-white mb-2 flex items-center gap-2"><Icon name="Target" className="w-4 h-4 text-green-500" /> Puntos por Jornada</h3><div className="grid grid-cols-3 gap-2 text-center text-xs"><div className="bg-slate-950 p-2 rounded-lg border border-white/10"><p className="text-slate-500 mb-1">MAJOR (+11)</p><p className="font-black text-green-400 text-lg">50 pts</p></div><div className="bg-slate-950 p-2 rounded-lg border border-white/10"><p className="text-slate-500 mb-1">TOUR (7-10)</p><p className="font-black text-blue-400 text-lg">35 pts</p></div><div className="bg-slate-950 p-2 rounded-lg border border-white/10"><p className="text-slate-500 mb-1">SOCIAL (3-6)</p><p className="font-black text-orange-400 text-lg">20 pts</p></div></div></div>
-                                    <div className="p-4 bg-slate-800/50 rounded-2xl border border-white/5"><h3 className="font-bold text-white mb-2 flex items-center gap-2"><Icon name="Zap" className="w-4 h-4 text-orange-500" /> Bonus</h3><ul className="space-y-2 text-xs font-medium text-slate-300"><li className="flex justify-between border-b border-white/5 pb-1"><span>Birdie</span> <span className="text-green-400 font-bold">+1 pto</span></li><li className="flex justify-between border-b border-white/5 pb-1"><span>Eagle</span> <span className="text-orange-400 font-bold">+2 ptos</span></li><li className="flex justify-between border-b border-white/5 pb-1"><span>Under Par</span> <span className="text-blue-400 font-bold">+5 ptos</span></li><li className="flex justify-between"><span>Asistencia</span> <span className="text-slate-400 font-bold">+2 ptos</span></li></ul></div>
+                                    <div className="p-4 bg-slate-800/50 rounded-2xl border border-white/5"><h3 className="font-bold text-white mb-2 flex items-center gap-2"><Icon name="Target" className="w-4 h-4 text-green-500" /> Sistema Puntos Único</h3>
+                                        <div className="text-center text-xs text-slate-300">
+                                            <p className="mb-2">Todas las partidas puntúan igual:</p>
+                                            <div className="flex justify-between bg-slate-950 p-3 rounded-lg border border-white/10">
+                                                <span>1º: <b className="text-green-400">50</b></span>
+                                                <span>2º: <b className="text-green-400">40</b></span>
+                                                <span>3º: <b className="text-green-400">32</b></span>
+                                                <span>4º: <b className="text-green-400">26</b></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="p-4 bg-slate-800/50 rounded-2xl border border-white/5"><h3 className="font-bold text-white mb-2 flex items-center gap-2"><Icon name="Zap" className="w-4 h-4 text-orange-500" /> Bonus</h3><ul className="space-y-2 text-xs font-medium text-slate-300"><li className="flex justify-between border-b border-white/5 pb-1"><span>Birdie</span> <span className="text-green-400 font-bold">+1 pto</span></li><li className="flex justify-between border-b border-white/5 pb-1"><span>Eagle</span> <span className="text-orange-400 font-bold">+2 ptos</span></li><li className="flex justify-between border-b border-white/5 pb-1"><span>Under Par</span> <span className="text-blue-400 font-bold">+5 ptos</span></li></ul></div>
                                     <div className="p-4 bg-slate-800/50 rounded-2xl border border-white/5"><h3 className="font-bold text-white mb-2 flex items-center gap-2"><Icon name="RefreshCw" className="w-4 h-4 text-purple-500" /> Hándicap Dinámico</h3><p className="text-xs text-slate-400 leading-relaxed">Ganador <strong>-0.4</strong>, 2º <strong>-0.2</strong>, 3º <strong>-0.1</strong>. Under Par <strong>-0.2 extra</strong>. Últimos <strong>+0.1</strong>.</p></div>
                                 </div>
                                 <button onClick={()=>setShowRules(false)} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-xl mt-6 uppercase text-xs tracking-widest shadow-lg transition-all">Cerrar</button>
@@ -490,7 +455,7 @@
                                                     <div className="flex-1 p-4 text-right font-black text-lg text-white">
                                                         {p.totalPoints}
                                                         <div className="text-[9px] text-slate-500 font-normal">
-                                                            Pos:{p.posTotal} + B:{p.bonusAccum}
+                                                            P:{p.posTotal} + B:{p.bonusAccum}
                                                         </div>
                                                     </div>
                                                 </div>
@@ -519,17 +484,15 @@
                                     <h2 className="font-bold text-green-500">Validar ({Object.values(includedInSync).filter(v=>v).length})</h2>
                                     <button onClick={uncheckNewMembers} className="text-[10px] uppercase border border-orange-500/50 text-orange-500 px-3 py-1 rounded">Ignorar Invitados</button>
                                 </div>
-                                {playersToRender.map(id => {
+                                {selectedForRound.sort((a,b)=>roundResults[a]-roundResults[b]).map(id => {
                                     const s = roundStats[id]; const inc = includedInSync[id];
                                     
                                     // Cálculo provisional para mostrar en pantalla
-                                    const activePlayers = playersToRender.filter(rid => includedInSync[rid]);
+                                    const activePlayers = selectedForRound.filter(rid => includedInSync[rid]);
                                     const realRankIndex = activePlayers.indexOf(id); 
                                     const realRank = realRankIndex + 1;
-                                    const numPlayers = activePlayers.length;
-                                    const pointsTable = numPlayers>=11?[50,42,35,30,26,22,19,16,14,12,10,9,8]:numPlayers>=7?[35,29,24,20,17,14,12,10,8,7]:[20,16,12,9,7,5];
-                                    const posPoints = inc ? (pointsTable[realRank-1] || 2) : 0;
-                                    const bonus = (s.birdies*1) + (s.eagles*2) + (s.underPar?5:0) + 2; 
+                                    const posPoints = inc ? (POINTS_TABLE[realRank-1] || 2) : 0;
+                                    const bonus = (s.birdies*1) + (s.eagles*2) + (s.underPar?5:0);
 
                                     return (
                                         <div key={id} className={`p-3 rounded-xl border flex justify-between items-center ${inc?'bg-white/5 border-white/10':'opacity-30 border-transparent'}`}>
@@ -539,6 +502,7 @@
                                                     <div className="font-bold text-sm">{s.name}</div>
                                                     <div className="text-[10px] text-slate-500">
                                                         POS: {realRank}º <span className="text-green-500 font-bold">(+{posPoints} pts)</span> + <span className="text-orange-400">Bonus: +{bonus}</span>
+                                                        <span className="ml-2 text-slate-600 font-mono">Neto: {s.score === 0 ? 'E' : (s.score > 0 ? '+'+s.score : s.score)}</span>
                                                         {s.isNew && inc ? ' • NUEVO' : ''}
                                                     </div>
                                                 </div>
