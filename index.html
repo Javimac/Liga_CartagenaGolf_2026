@@ -48,8 +48,8 @@
             messagingSenderId: "965701233208",
             appId: "1:965701233208:web:b8c54ce4071a30689614cd"
         };
-        const currentAppId = "golf-tour-cartagena-2026-final";
 
+        const currentAppId = "golf-tour-cartagena-2026-v4-medal"; // Nueva versión limpia
         let db, auth;
         let useCloud = false;
 
@@ -79,14 +79,14 @@
             useEffect(() => {
                 if (window.lucide && window.lucide.icons && window.lucide.icons[name]) {
                     const iconData = window.lucide.icons[name];
-                    if (Array.isArray(iconData) && Array.isArray(iconData[1])) {
-                        const paths = iconData[1].map(child => {
-                            const [tag, attrs] = child;
-                            const attrStr = Object.entries(attrs).map(([k,v]) => `${k}="${v}"`).join(' ');
-                            return `<${tag} ${attrStr} />`;
-                        }).join('');
-                        setSvg(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`);
-                    }
+                    // Soporte para ambas versiones de Lucide
+                    const children = Array.isArray(iconData[2]) ? iconData[2] : (Array.isArray(iconData[1]) ? iconData[1] : []);
+                    const paths = children.map(child => {
+                        const [tag, attrs] = child;
+                        const attrStr = Object.entries(attrs).map(([k,v]) => `${k}="${v}"`).join(' ');
+                        return `<${tag} ${attrStr} />`;
+                    }).join('');
+                    setSvg(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`);
                 }
             }, [name]);
             return svg ? <span className={`inline-flex items-center justify-center ${className}`} dangerouslySetInnerHTML={{ __html: svg }} /> : <span className={`inline-block w-5 h-5 bg-slate-800 rounded-full ${className}`}></span>;
@@ -117,15 +117,17 @@
             const [roundStats, setRoundStats] = useState({});
             const [includedInSync, setIncludedInSync] = useState({}); 
             const [sortConfig, setSortConfig] = useState({ key: 'totalPoints', direction: 'desc' });
+            
+            const [uploadMsg, setUploadMsg] = useState('');
 
             const ADMIN_PASS = "1234";
-            const MAX_COUNTED = 50;
+            const MAX_COUNTED = 20;
 
-            // --- TABLA DE PUNTOS UNIFICADA (Estándar 2026) ---
+            // --- TABLA UNIFICADA ---
             const POINTS_TABLE = [
                 50, 40, 32, 26, 22, 19, 16, 14, 12, 10, 
-                9, 8, 7, 6, 5, 4, 3, 2 // Del 11º al 18º
-            ]; // Resto 2 puntos
+                9, 8, 7, 6, 5, 4, 3, 2 
+            ];
 
             useEffect(() => {
                 const load = async () => {
@@ -152,9 +154,7 @@
                             }, err => { loadLocal(); });
 
                             ref.collection('global_stats').doc('adjustments').onSnapshot(d => {
-                                if(d.exists) {
-                                    setLastAdjustments(d.data().history || []);
-                                }
+                                if(d.exists) setLastAdjustments(d.data().history || []);
                             });
                         } catch (e) { loadLocal(); }
                     } else { loadLocal(); }
@@ -190,160 +190,222 @@
                 } catch(e) { setStatus('ready'); alert("Error al borrar"); }
             };
 
-            const handleFiles = (e) => {
+            const handleFiles = async (e) => {
                 const files = Array.from(e.target.files);
                 if (!files.length) return;
+                
+                setStatus('loading');
+                setUploadMsg('Procesando archivos...');
+                
                 const allRows = [];
-                let processed = 0;
-
-                const readFile = (file) => {
-                    return new Promise((resolve) => {
-                        const reader = new FileReader();
-                        reader.onload = (ev) => {
+                const readFilePromise = (file) => new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                        try {
                             const data = new Uint8Array(ev.target.result);
                             const wb = XLSX.read(data, {type:'array'});
                             const ws = wb.Sheets[wb.SheetNames[0]];
                             const json = XLSX.utils.sheet_to_json(ws, {header:1});
                             resolve(json);
-                        };
-                        reader.readAsArrayBuffer(file);
-                    });
-                };
-
-                files.forEach(async (file) => {
-                    try {
-                        const rows = await readFile(file);
-                        let startIdx = -1;
-                        for (let i=0; i<Math.min(rows.length, 20); i++) {
-                            const s = (rows[i]||[]).join(' ').toLowerCase();
-                            if(s.includes('licencia') && s.includes('nombre')) { startIdx = i; break; }
-                        }
-                        if (startIdx !== -1) {
-                            rows.slice(startIdx + 1).forEach(row => { if (row.length > 5) allRows.push(row); });
-                        }
-                    } catch (err) { console.error(err); }
-                    processed++;
-                    if (processed === files.length && allRows.length > 0) processAllRows(allRows);
+                        } catch(err) { resolve([]); }
+                    };
+                    reader.readAsArrayBuffer(file);
                 });
+
+                try {
+                    const sheets = await Promise.all(files.map(file => readFilePromise(file)));
+                    sheets.forEach(rows => {
+                        // Detección dinámica de cabeceras
+                        let headerIdx = -1;
+                        for (let i=0; i<Math.min(rows.length, 25); i++) {
+                            const s = (rows[i]||[]).map(c=>String(c).toLowerCase()).join(' ');
+                            if(s.includes('licencia') && s.includes('nombre')) { headerIdx = i; break; }
+                        }
+                        
+                        if (headerIdx !== -1) {
+                            // Extraer índices de columnas
+                            const header = rows[headerIdx].map(c => String(c).toLowerCase().trim());
+                            const colLic = header.findIndex(c => c.includes('licencia'));
+                            const colName = header.findIndex(c => c.includes('nombre'));
+                            const colHcp = header.findIndex(c => c.includes('hce') || c.includes('hcpe'));
+                            // Prioridad a 'res. total' (Resultados), si no 'total' (Clasificación)
+                            let colRes = header.findIndex(c => c.includes('res. total'));
+                            if (colRes === -1) colRes = header.findIndex(c => c.includes('total') && !c.includes('neto')); 
+
+                            rows.slice(headerIdx + 1).forEach(row => {
+                                if (row[colLic] && row[colName]) {
+                                    allRows.push({
+                                        row, colLic, colName, colHcp, colRes
+                                    });
+                                }
+                            });
+                        }
+                    });
+                    if (allRows.length > 0) processAllRows(allRows);
+                    else { alert("No se encontraron datos"); setStatus('ready'); }
+                } catch (e) { console.error(e); setStatus('ready'); }
             };
 
-            const processAllRows = (rows) => {
-                let extracted = rows.map(row => {
-                    const lic = row[1] ? String(row[1]).trim() : "";
-                    const rawName = row[3] ? String(row[3]).trim() : "";
-                    const hcpStr = row[4];
-                    const resStr = row[8];
-                    if (!lic && !rawName) return null;
-
-                    let hcp = parseFloat(String(hcpStr).replace(',','.')) || 18;
-                    let resTotal = String(resStr).toUpperCase() === 'PAR' ? 0 : parseInt(resStr);
-                    if (isNaN(resTotal)) resTotal = 999;
-                    let b=0, eg=0;
-                    for(let k=11; k<=28; k++) {
-                        if(row[k] == -1) b++;
-                        if(row[k] == -2) eg++;
+            const processAllRows = (dataItems) => {
+                let extracted = dataItems.map(item => {
+                    const { row, colLic, colName, colHcp, colRes } = item;
+                    
+                    const lic = String(row[colLic]).trim();
+                    const rawName = String(row[colName]).trim();
+                    
+                    // HCP
+                    let hcp = 18;
+                    if (colHcp > -1 && row[colHcp]) {
+                        hcp = typeof row[colHcp] === 'number' ? row[colHcp] : parseFloat(String(row[colHcp]).replace(',','.'));
                     }
-                    return { name: formatName(rawName), license: lic, handicap: hcp, score: resTotal, birdies: b, eagles: eg, underPar: resTotal < 0 };
-                }).filter(x => x!==null);
+                    
+                    // Resultado (Score Medal Play)
+                    let resTotal = 999;
+                    if (colRes > -1 && row[colRes]) {
+                        const s = String(row[colRes]).toUpperCase();
+                        if (s === 'PAR' || s === 'E') resTotal = 0;
+                        else resTotal = parseInt(s) || 999;
+                    }
 
-                // Ordenar por Resultado NETO (Medal Play)
-                extracted.sort((a,b) => {
-                    if (a.score !== b.score) return a.score - b.score;
-                    return a.handicap - b.handicap;
+                    // Birdies (Heurística: buscar columnas con -1 y -2)
+                    let b=0, eg=0;
+                    row.forEach(val => {
+                        if (val === -1) b++;
+                        if (val === -2) eg++;
+                    });
+
+                    return { 
+                        name: formatName(rawName), 
+                        license: lic, 
+                        handicap: hcp, 
+                        score: resTotal, 
+                        birdies: b, eagles: eg, underPar: resTotal < 0 
+                    };
                 });
 
-                const res = {}, st = {}, sel = [], inc = {};
-                extracted.forEach((data, idx) => {
-                    const pid = `p_${data.license}`;
-                    const existing = players.find(p => p.license === data.license);
-                    if (!sel.includes(pid)) {
-                        sel.push(pid);
-                        res[pid] = idx + 1; 
-                        inc[pid] = true;
-                        st[pid] = { ...data, isNew: !existing };
+                // 1. Fusionar (Mismo jugador en varios archivos -> nos quedamos con el que tenga birdies)
+                const mergedMap = new Map();
+                extracted.forEach(p => {
+                    if (!mergedMap.has(p.license)) mergedMap.set(p.license, p);
+                    else {
+                        const ex = mergedMap.get(p.license);
+                        if (p.birdies > ex.birdies || p.eagles > ex.eagles) mergedMap.set(p.license, p);
+                        // Si tienen mismos birdies, nos quedamos con el que tenga mejor score (por si acaso)
+                        else if (p.score < ex.score) mergedMap.set(p.license, p);
                     }
                 });
                 
-                setSelectedForRound(sel); setRoundResults(res); setRoundStats(st); setIncludedInSync(inc); setView('add');
+                const finalPlayers = Array.from(mergedMap.values());
+
+                // 2. Ordenar UNIFICADO (Medal Play: Menor Resultado gana)
+                finalPlayers.sort((a,b) => {
+                    if (a.score !== b.score) return a.score - b.score;
+                    return a.handicap - b.handicap; // Desempate hcp más bajo
+                });
+
+                const res = {}, st = {}, sel = [], inc = {};
+                finalPlayers.forEach((data, idx) => {
+                    const existing = players.find(p => p.license === data.license);
+                    const pid = existing ? existing.id : `new_${data.license}`;
+                    
+                    sel.push(pid);
+                    res[pid] = idx + 1; // 1º, 2º, 3º...
+                    inc[pid] = true;
+                    st[pid] = { ...data, isNew: !existing };
+                });
+                
+                setSelectedForRound(sel); setRoundResults(res); setRoundStats(st); setIncludedInSync(inc); 
+                setStatus('ready');
+                setUploadMsg('');
+                setView('add');
             };
 
             const confirmRound = async () => {
                 const toSync = selectedForRound.filter(id => includedInSync[id]);
                 if(!toSync.length) return alert("Selecciona jugadores");
                 
-                // Reordenar por la posición calculada
+                // Reordenar por la posición calculada (Medal Play)
                 toSync.sort((a,b) => roundResults[a] - roundResults[b]);
-                
-                const num = toSync.length;
-                // YA NO HAY CATEGORIAS, USAMOS LA TABLA UNIFICADA
                 
                 let updatedPlayers = [...players];
                 const adjs = [];
                 const pubRef = db ? db.collection('artifacts').doc(currentAppId).collection('public').doc('data') : null;
 
-                for (let i = 0; i < toSync.length; i++) {
-                    const tid = toSync[i];
-                    const s = roundStats[tid];
-                    const realRank = i + 1; 
+                setStatus('loading');
+                setUploadMsg('Sincronizando...');
 
-                    let player = players.find(p => p.license === s.license);
-                    let ref, data;
+                try {
+                    for (let i = 0; i < toSync.length; i++) {
+                        const tid = toSync[i];
+                        const s = roundStats[tid];
+                        const realRank = i + 1; 
 
-                    if (!player) {
-                         const newP = { name: s.name, license: s.license, handicap: s.handicap, scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 };
-                        if (useCloud) {
-                            const doc = await pubRef.collection('players').add(newP);
-                            ref = doc; data = { ...newP, id: doc.id };
+                        let player = players.find(p => p.license === s.license);
+                        let ref, data;
+
+                        if (!player) {
+                             const newP = { name: s.name, license: s.license, handicap: s.handicap, scores: [], birdies: 0, eagles: 0, bonusUnderPar: 0, games: 0 };
+                            if (useCloud) {
+                                const doc = await pubRef.collection('players').add(newP);
+                                ref = doc; data = { ...newP, id: doc.id };
+                            } else {
+                                newP.id = `loc_${Date.now()}_${i}`; data = newP; updatedPlayers.push(data);
+                            }
                         } else {
-                            newP.id = `loc_${Date.now()}_${i}`; data = newP; updatedPlayers.push(data);
+                            ref = useCloud ? pubRef.collection('players').doc(player.id) : null;
+                            data = player;
                         }
-                    } else {
-                        ref = useCloud ? pubRef.collection('players').doc(player.id) : null;
-                        data = player;
-                    }
 
-                    // Puntos unificados
-                    const pts = POINTS_TABLE[realRank-1] || 2;
-                    
-                    let adj = 0;
-                    if(realRank===1) adj = -0.4;
-                    else if(realRank===2) adj = -0.2;
-                    else if(realRank===3) adj = -0.1;
-                    if(s.underPar) adj -= 0.2;
-                    if(num>5 && realRank>num-2) adj += 0.1;
-                    
-                    const newHcp = Math.max(0, parseFloat((data.handicap + adj).toFixed(1)));
-                    if (adj !== 0) adjs.push({ name: s.name, change: adj, final: newHcp });
-                    
-                    const newScores = [...(data.scores||[]), Number(pts)];
-                    
-                    const pIndex = updatedPlayers.findIndex(p => p.id === data.id);
-                    if(pIndex !== -1) {
-                         updatedPlayers[pIndex] = {
-                            ...data,
-                            handicap: newHcp,
-                            scores: newScores,
-                            birdies: (data.birdies||0) + s.birdies,
-                            eagles: (data.eagles||0) + s.eagles,
-                            bonusUnderPar: (data.bonusUnderPar||0) + (s.underPar?5:0),
-                            games: (data.games||0) + 1
-                         };
-                    }
+                        // Puntos Unificados
+                        const pts = POINTS_TABLE[realRank-1] || 2;
+                        
+                        // Ajuste HCP
+                        let adj = 0;
+                        if(realRank===1) adj = -0.4;
+                        else if(realRank===2) adj = -0.2;
+                        else if(realRank===3) adj = -0.1;
+                        if(s.underPar) adj -= 0.2;
+                        if(toSync.length>5 && realRank>toSync.length-2) adj += 0.1;
+                        
+                        const newHcp = Math.max(0, parseFloat((data.handicap + adj).toFixed(1)));
+                        if (adj !== 0) adjs.push({ name: s.name, change: adj, final: newHcp });
+                        
+                        // FIX: Sobrescribir array de puntos
+                        const currentScores = data.scores || [];
+                        const newScores = [...currentScores, Number(pts)];
+                        
+                        // Actualizar Local
+                        const pIndex = updatedPlayers.findIndex(p => p.id === data.id);
+                        if(pIndex !== -1) {
+                             updatedPlayers[pIndex] = {
+                                ...data,
+                                handicap: newHcp,
+                                scores: newScores,
+                                birdies: (data.birdies||0) + s.birdies,
+                                eagles: (data.eagles||0) + s.eagles,
+                                bonusUnderPar: (data.bonusUnderPar||0) + (s.underPar?5:0),
+                                games: (data.games||0) + 1
+                             };
+                        }
 
-                    if (useCloud && ref) {
-                        await ref.update({
-                            handicap: newHcp,
-                            scores: newScores,
-                            birdies: firebase.firestore.FieldValue.increment(s.birdies),
-                            eagles: firebase.firestore.FieldValue.increment(s.eagles),
-                            bonusUnderPar: firebase.firestore.FieldValue.increment(s.underPar?5:0),
-                            games: firebase.firestore.FieldValue.increment(1)
-                        });
+                        if (useCloud && ref) {
+                            await ref.update({
+                                handicap: newHcp,
+                                scores: newScores,
+                                birdies: firebase.firestore.FieldValue.increment(s.birdies),
+                                eagles: firebase.firestore.FieldValue.increment(s.eagles),
+                                bonusUnderPar: firebase.firestore.FieldValue.increment(s.underPar?5:0),
+                                games: firebase.firestore.FieldValue.increment(1)
+                            });
+                        }
                     }
-                }
-                
-                if (useCloud) { pubRef.collection('global_stats').doc('adjustments').set({history: adjs}); } 
-                else { saveDataLocal(updatedPlayers, adjs); }
+                    
+                    if (useCloud) { pubRef.collection('global_stats').doc('adjustments').set({history: adjs}); } 
+                    else { saveDataLocal(updatedPlayers, adjs); }
+                } catch(e) { console.error(e); }
+
+                setStatus('ready');
+                setUploadMsg('');
                 setSelectedForRound([]); setView('ranking');
             };
 
@@ -352,8 +414,8 @@
                     const sorted = [...(p.scores || [])].sort((a,b) => b-a);
                     const best = sorted.slice(0, MAX_COUNTED);
                     const pts = best.reduce((a,b) => Number(a)+Number(b), 0);
-                    // SIN ASISTENCIA (+0 en games)
-                    const bonus = (Number(p.birdies)||0) + (Number(p.eagles)||0)*2 + (Number(p.bonusUnderPar)||0);
+                    // SIN ASISTENCIA (Solo bonus de calidad)
+                    const bonus = (Number(p.birdies)||0) + (Number(p.eagles)||0)*2 + (Number(p.bonusUnderPar)||0)*5; 
                     return { ...p, totalPoints: pts + bonus, posTotal: pts, bonusAccum: bonus, avg: p.games > 0 ? (pts / Math.min(p.games, MAX_COUNTED)).toFixed(1) : "0" };
                 });
                 return data.sort((a, b) => {
@@ -376,7 +438,7 @@
             };
             const deletePlayer = async (id) => { if(confirm("¿Borrar?")) { if(useCloud) await db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('players').doc(id).delete(); else saveDataLocal(players.filter(p=>p.id!==id), lastAdjustments); } };
 
-            if (status === 'loading') return <div className="h-screen bg-slate-950 flex items-center justify-center"><div className="w-10 h-10 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div></div>;
+            if (status === 'loading') return <div className="h-screen bg-slate-950 flex flex-col gap-4 items-center justify-center"><div className="w-10 h-10 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div>{uploadMsg && <p className="text-xs text-green-500 font-bold uppercase animate-pulse">{uploadMsg}</p>}</div>;
 
             return (
                 <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col max-w-5xl mx-auto">
@@ -401,17 +463,7 @@
                                 <button onClick={()=>setShowRules(false)} className="absolute top-4 right-4 bg-white/10 p-2 rounded-full hover:bg-white/20"><Icon name="X" className="w-5 h-5 text-white" /></button>
                                 <div className="text-center mb-6"><h2 className="text-2xl font-black uppercase italic text-blue-500 tracking-tighter">Bases del Tour 2026</h2><p className="text-xs text-slate-500 font-bold uppercase tracking-widest">Reglamento Oficial</p></div>
                                 <div className="space-y-6 text-sm">
-                                    <div className="p-4 bg-slate-800/50 rounded-2xl border border-white/5"><h3 className="font-bold text-white mb-2 flex items-center gap-2"><Icon name="Target" className="w-4 h-4 text-green-500" /> Sistema Puntos Único</h3>
-                                        <div className="text-center text-xs text-slate-300">
-                                            <p className="mb-2">Todas las partidas puntúan igual:</p>
-                                            <div className="flex justify-between bg-slate-950 p-3 rounded-lg border border-white/10">
-                                                <span>1º: <b className="text-green-400">50</b></span>
-                                                <span>2º: <b className="text-green-400">40</b></span>
-                                                <span>3º: <b className="text-green-400">32</b></span>
-                                                <span>4º: <b className="text-green-400">26</b></span>
-                                            </div>
-                                        </div>
-                                    </div>
+                                    <div className="p-4 bg-slate-800/50 rounded-2xl border border-white/5"><h3 className="font-bold text-white mb-2 flex items-center gap-2"><Icon name="Target" className="w-4 h-4 text-green-500" /> Puntos Unificados</h3><div className="text-center text-xs bg-slate-950 p-3 rounded-lg border border-white/10">1º: <b className="text-green-400">50</b> | 2º: <b className="text-green-400">40</b> | 3º: <b className="text-green-400">32</b> | 4º: <b className="text-green-400">26</b> ...</div><p className="text-[10px] text-slate-500 mt-2 italic text-center">* Clasificación única por Medal Play Neto</p></div>
                                     <div className="p-4 bg-slate-800/50 rounded-2xl border border-white/5"><h3 className="font-bold text-white mb-2 flex items-center gap-2"><Icon name="Zap" className="w-4 h-4 text-orange-500" /> Bonus</h3><ul className="space-y-2 text-xs font-medium text-slate-300"><li className="flex justify-between border-b border-white/5 pb-1"><span>Birdie</span> <span className="text-green-400 font-bold">+1 pto</span></li><li className="flex justify-between border-b border-white/5 pb-1"><span>Eagle</span> <span className="text-orange-400 font-bold">+2 ptos</span></li><li className="flex justify-between border-b border-white/5 pb-1"><span>Under Par</span> <span className="text-blue-400 font-bold">+5 ptos</span></li></ul></div>
                                     <div className="p-4 bg-slate-800/50 rounded-2xl border border-white/5"><h3 className="font-bold text-white mb-2 flex items-center gap-2"><Icon name="RefreshCw" className="w-4 h-4 text-purple-500" /> Hándicap Dinámico</h3><p className="text-xs text-slate-400 leading-relaxed">Ganador <strong>-0.4</strong>, 2º <strong>-0.2</strong>, 3º <strong>-0.1</strong>. Under Par <strong>-0.2 extra</strong>. Últimos <strong>+0.1</strong>.</p></div>
                                 </div>
@@ -487,12 +539,14 @@
                                 {selectedForRound.sort((a,b)=>roundResults[a]-roundResults[b]).map(id => {
                                     const s = roundStats[id]; const inc = includedInSync[id];
                                     
-                                    // Cálculo provisional para mostrar en pantalla
+                                    // Cálculo provisional
                                     const activePlayers = selectedForRound.filter(rid => includedInSync[rid]);
-                                    const realRankIndex = activePlayers.indexOf(id); 
-                                    const realRank = realRankIndex + 1;
+                                    // RE-SORT para obtener posición real provisional
+                                    activePlayers.sort((a,b) => roundResults[a] - roundResults[b]);
+                                    
+                                    const realRank = activePlayers.indexOf(id) + 1;
                                     const posPoints = inc ? (POINTS_TABLE[realRank-1] || 2) : 0;
-                                    const bonus = (s.birdies*1) + (s.eagles*2) + (s.underPar?5:0);
+                                    const bonus = (s.birdies*1) + (s.eagles*2) + (s.underPar?5:0); // + 0 asistencia
 
                                     return (
                                         <div key={id} className={`p-3 rounded-xl border flex justify-between items-center ${inc?'bg-white/5 border-white/10':'opacity-30 border-transparent'}`}>
